@@ -4,51 +4,58 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main]
-
 jobs:
   build:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: build/.ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: |
+            ccache-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            clang ccache \
-            binutils-aarch64-linux-gnu \
-            bc bison flex libssl-dev libelf-dev \
-            dtc u-boot-tools qemu-user-static qemu-user-binfmt \
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            ccache \
+            qemu-user qemu-user-static \
+            device-tree-compiler u-boot-tools \
             python3 cpio gzip xz-utils \
-            lld
+            binutils-aarch64-linux-gnu \
+            zip
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
-      - name: Register QEMU binfmt
-        run: |
-          qemu-user-static --reset -p yes || true
-
       - name: Configure kernel reference and ccache
         run: |
           echo "KERNEL_REF=$(git rev-parse HEAD)" >> config/source-lock.env
           mkdir -p build/.ccache
           echo "CCACHE_DIR=build/.ccache" >> config/build.env
+          echo "CCACHE_COMPILERCHECK=content" >> config/build.env
+          ccache --max-size=2G
+          ccache --show-stats
           cat config/source-lock.env
 
       - name: Build WDMCH rescue image
         run: |
-          export CC="ccache clang"
-          export CLANG_TARGET="aarch64-linux-gnu"
-          export CROSS_COMPILE="${CLANG_TARGET}-"
-          export LLVM=1
-          export LLVM_IAS=1
+          export CC="ccache aarch64-linux-gnu-gcc"
+          export CROSS_TARGET="aarch64-linux-gnu"
+          export CROSS_COMPILE="${CROSS_TARGET}-"
+          # Uses GNU ld via aarch64-linux-gnu-gcc
+          ./build-image.sh --help
+          ./build-image.sh --dry-run
           ./build-image.sh --clean
           ./build-image.sh
 
@@ -73,46 +80,111 @@ jobs:
     permissions:
       contents: write
     if: startsWith(github.ref, 'refs/tags/v')
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v8
+      - name: Restore ccache
+        uses: actions/cache@v4
         with:
-          name: wdmch-rescue-artifacts
-          path: build/release/
+          path: build/.ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: |
+            ccache-
 
-      - name: Create GitHub Release
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            ccache \
+            qemu-user qemu-user-static \
+            device-tree-compiler u-boot-tools \
+            python3 cpio gzip xz-utils \
+            binutils-aarch64-linux-gnu \
+            zip
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Configure kernel reference and ccache
+        run: |
+          echo "KERNEL_REF=$(git rev-parse HEAD)" >> config/source-lock.env
+          mkdir -p build/.ccache
+          echo "CCACHE_DIR=build/.ccache" >> config/build.env
+          echo "CCACHE_COMPILERCHECK=content" >> config/build.env
+          ccache --max-size=2G
+          ccache --show-stats
+          cat config/source-lock.env
+
+      - name: Set up SSH authorized key
+        run: |
+          if [ -z "${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}" ]; then
+            echo "ERROR: WDMCH_SSH_AUTHORIZED_KEY is required for release builds" >&2
+            exit 1
+          fi
+          mkdir -p rootfs/overlay/root/.ssh
+          echo "${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}" > rootfs/overlay/root/.ssh/authorized_keys
+          chmod 700 rootfs/overlay/root/.ssh
+          chmod 600 rootfs/overlay/root/.ssh/authorized_keys
+          echo "SSH authorized key configured"
+
+      - name: Build complete image
+        run: |
+          export CC="ccache aarch64-linux-gnu-gcc"
+          export CROSS_TARGET="aarch64-linux-gnu"
+          export CROSS_COMPILE="${CROSS_TARGET}-"
+          ./build-image.sh --clean
+          ./build-image.sh
+
+      - name: Run all tests
+        run: |
+          bash tests/test_tools.sh
+          bash tests/test_workflows.sh
+          bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
+
+      - name: Create release archive
+        run: |
+          VERSION=$(cat VERSION)
+          # Create full release archive
+          tar -cJf "alpine-wdmch-rescue-${VERSION}.tar.xz" \
+            --exclude='.git' \
+            --exclude='*.pyc' \
+            build/release/
+          # Create release zip of USB flash contents
+          cd build/release
+          zip -j "../../alpine-wdmch-rescue-${VERSION}-flash.zip" \
+            sata.uImage \
+            rescue.sata.dtb \
+            rescue.root.sata.cpio.gz_pad.img \
+            SHA256SUMS \
+            manifest.json
+          cd ../..
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            build/release/*
+            alpine-wdmch-rescue-*-flash.zip
             SHA256SUMS
             manifest.json
           body: |
-            # WDMCH Alpine Rescue Image
-            
+            # WDMCH Alpine Rescue Image v${VERSION}
             ## Device
             - WD My Cloud Home (single-bay)
             - Realtek RTD1295
             - ARM64 / aarch64
-            
             ## Artifacts
-            - `sata.uImage` - Patched raw ARM64 Image + 512 KiB padding
-            - `rescue.sata.dtb` - WDMCH device tree blob
-            - `rescue.root.sata.cpio.gz_pad.img` - 4 MiB padded rescue rootfs
-            
-            ## Usage
-            See [docs/usb-rescue.md](docs/usb-rescue.md) for instructions.
-            
-            ## WARNING
-            - DO NOT boot GOLD partition
-            - DO NOT write A/B/GOLD firmware slots
-            - USB rescue is read-only with respect to the NAS
-
+            See [docs/usb-rescue.md](docs/usb-rescue.md) for USB boot instructions.
+            ## Security
+            - Root SSH uses public-key authentication only
       - name: Upload release assets
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          asset_path: alpine-wdmch-rescue-${{ github.ref_name }}-flash.zip
+          asset_name: alpine-wdmch-rescue-${{ github.ref_name }}-flash.zip
+          asset_content_type: application/zip

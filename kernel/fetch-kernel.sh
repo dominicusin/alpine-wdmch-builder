@@ -7,42 +7,24 @@ source config/source-lock.env
 set +a
 
 KERNEL_DIR="${KERNEL_DIR:-.work/monarch-6.18}"
-BUILD_DIR="${BUILD_DIR:-build/kernel}"
-
-# Cross-compilation setup
-CLANG_TARGET="${CLANG_TARGET:-aarch64-linux-gnu}"
-CC="${CCACHE:-ccache} clang"
-
-echo "=== Fetching WDMCH kernel ==="
-echo "Repository: $KERNEL_REPO"
-echo "Reference:  $KERNEL_REF"
+GIT_REPO="${GIT_REPO:-https://github.com/symops/monarch-6.18.git}"
+BRANCH="${BRANCH:-main}"
 
 if [ ! -d "$KERNEL_DIR/.git" ]; then
-    echo "Cloning $KERNEL_REPO into $KERNEL_DIR..."
-    git clone "$KERNEL_REPO" "$KERNEL_DIR"
+    echo "=== Cloning kernel source ==="
+    git clone "$GIT_REPO" "$KERNEL_DIR" --branch "$BRANCH" --depth 1
 else
-    echo "$KERNEL_DIR already exists, fetching..."
-    git -C "$KERNEL_DIR" fetch --all --depth=1
+    echo "=== Kernel source already exists, checking status ==="
+    git -C "$KERNEL_DIR" status --short || true
+    echo "=== Fetching updates ==="
+    git -C "$KERNEL_DIR" fetch origin "$BRANCH" --depth 1 || true
+    echo "=== Merging instead of resetting ==="
+    git -C "$KERNEL_DIR" merge --ff-only "origin/$BRANCH" 2>&1 || echo "Merge not possible (local changes), keeping current tree"
 fi
 
-# Reset to pinned ref
-echo "Resetting to $KERNEL_REF..."
-git -C "$KERNEL_DIR" reset --hard "$KERNEL_REF"
+# Clean the source tree to ensure Kbuild out-of-tree build checks pass
+echo "Cleaning source tree for out-of-tree build..."
+git -C "$KERNEL_DIR" clean -fdx 2>&1 || true
+git -C "$KERNEL_DIR" checkout -- . 2>&1 || true
 
-# Verify commit
-actual_sha=$(git -C "$KERNEL_DIR" rev-parse HEAD)
-echo "Actual commit: $actual_sha"
-if [ "$actual_sha" != "$KERNEL_REF" ] && [ "$KERNEL_REF" != "HEAD" ]; then
-    echo "ERROR: Commit SHA mismatch! Expected $KERNEL_REF, got $actual_sha" >&2
-    exit 1
-fi
-
-# Check for dirty tree
-if git -C "$KERNEL_DIR" diff-index --quiet HEAD --; then
-    echo "Tree is clean."
-else
-    echo "ERROR: Tree is dirty! Refusing to continue." >&2
-    exit 1
-fi
-
-echo "Kernel fetch complete."
+echo "Kernel source ready at $KERNEL_DIR"

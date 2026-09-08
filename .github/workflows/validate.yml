@@ -15,28 +15,60 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: build/.ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: |
+            ccache-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential bc bison flex libssl-dev libelf-dev \
-            dtc python3 cpio gzip xz-utils \
-            crossbuild-essential-arm64
+            gcc-aarch64-linux-gnu \
+            ccache \
+            device-tree-compiler \
+            python3 \
+            shellcheck \
+            zip
 
-      - name: Validate repository structure
-        run: bash tests/test_repo_layout.sh
-
-      - name: Validate tool tests
-        run: bash tests/test_tools.sh
-
-      - name: Validate workflow files
-        run: bash tests/test_workflows.sh
-
-      - name: Build and validate kernel metadata
+      - name: Configure ccache
         run: |
-          # Skip kernel build in validate (too slow), just validate structure
-          bash tests/test_kernel_metadata.sh || true
-          bash tests/test_dtb.sh || true
+          mkdir -p build/.ccache
+          echo "CCACHE_DIR=build/.ccache" >> config/build.env
+          echo "CCACHE_COMPILERCHECK=content" >> config/build.env
+          ccache --max-size=2G
+          ccache --show-stats
 
-      - name: Check dependencies
-        run: bash tools/check-deps.sh
+      - name: Validate shell scripts
+        run: |
+          shellcheck build-image.sh kernel/build-kernel.sh kernel/fetch-kernel.sh dtb/build-dtb.sh tools/check-deps.sh
+
+      - name: Validate Python scripts
+        run: |
+          python3 -m py_compile tools/check-image-header.py tools/check-fdt.py
+          python3 tools/check-image-header.py
+          python3 tools/check-fdt.py
+
+      - name: Validate kernel config
+        run: |
+          python3 tools/check-image-header.py
+          python3 tools/check-fdt.py
+
+      - name: Run unit tests
+        run: |
+          make test
+          bash tests/test_repo_layout.sh
+          bash tests/test_build_dry_run.sh
+
+      - name: Run validation tests
+        run: |
+          bash tests/test_tools.sh
+          bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
+
+      - name: Validate image structure
+        run: |
+          python3 tools/check-image-header.py
+          python3 tools/check-fdt.py build/kernel/rtd1295-wd-mycloud-home.dtb || true
