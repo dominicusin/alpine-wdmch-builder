@@ -11,6 +11,10 @@ for f in sata.uImage rescue.sata.dtb rescue.root.sata.cpio.gz_pad.img SHA256SUMS
         echo "FAIL: Missing $f" >&2
         exit 1
     fi
+    if [ ! -s "$RELEASE_DIR/$f" ]; then
+        echo "FAIL: $f is empty" >&2
+        exit 1
+    fi
 done
 
 # Verify checksums
@@ -25,14 +29,24 @@ cd -
 
 # Verify uImage size (kernel + 512 KiB padding)
 UIMAGE_SIZE=$(stat -c '%s' "$RELEASE_DIR/sata.uImage")
-echo "sata.uImage size: $UIMAGE_SIZE bytes"
+KERNEL_SIZE=$(stat -c '%s' "$BUILD_DIR/Image" 2>/dev/null || echo "0")
+if [ "$KERNEL_SIZE" -gt 0 ]; then
+    PADDING_SIZE=$((UIMAGE_SIZE - KERNEL_SIZE))
+    ZERO_BYTES=$(tail -c "$PADDING_SIZE" "$RELEASE_DIR/sata.uImage" | tr -d '\0' | wc -c)
+    if [ "$ZERO_BYTES" -eq 0 ]; then
+        echo "uImage padding is all zeros: OK"
+    else
+        echo "FAIL: uImage padding contains non-zero bytes" >&2
+        exit 1
+    fi
+fi
 
-# Verify rescue rootfs size (exactly 4 MiB)
+# Verify rescue rootfs size
 RESCUE_SIZE=$(stat -c '%s' "$RELEASE_DIR/rescue.root.sata.cpio.gz_pad.img")
 if [ "$RESCUE_SIZE" -eq 4194304 ]; then
-    echo "rescue.root.sata.cpio.gz_pad.img size: $RESCUE_SIZE bytes (correct)"
+    echo "Rescue rootfs size == 4194304: OK"
 else
-    echo "FAIL: rescue.root.sata.cpio.gz_pad.img size is $RESCUE_SIZE, expected 4194304" >&2
+    echo "FAIL: Rescue rootfs size is $RESCUE_SIZE, expected 4194304" >&2
     exit 1
 fi
 

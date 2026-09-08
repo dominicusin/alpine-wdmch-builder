@@ -43,8 +43,8 @@ package:
 
 validate:
 	bash tests/test_tools.sh
-	bash tools/check-image-header.py build/release/sata.uImage || true
-	bash tools/check-fdt.py build/release/rescue.sata.dtb || true
+	python3 tools/check-image-header.py build/release/sata.uImage || true
+	python3 tools/check-fdt.py build/release/rescue.sata.dtb || true
 	bash tools/check-artifacts.sh build/release || true
 
 test: validate

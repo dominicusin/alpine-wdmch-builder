@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION=$(cat VERSION)
+VERSION=$(cat VERSION 2>/dev/null || echo "0.1.0-dev")
 
 show_help() {
     cat <<EOF
@@ -17,6 +17,8 @@ Environment:
   Optional config/build.env can define:
     WDMCH_SSH_AUTHORIZED_KEY  SSH public key for root login
     KERNEL_REF                Override kernel commit reference
+    CCACHE_DIR                ccache directory (default: build/.ccache)
+    CLANG_TARGET              Clang target triple (default: aarch64-linux-gnu)
 EOF
 }
 
@@ -25,7 +27,7 @@ run_dry_run() {
     echo "VERSION: ${VERSION}"
     echo ""
     echo "Checking required tools..."
-    for tool in git make gcc python3 dtc cpio gzip xz; do
+    for tool in git make clang ccache python3 dtc cpio gzip xz; do
         if command -v "$tool" >/dev/null 2>&1; then
             echo "  OK: $tool"
         else
@@ -51,10 +53,17 @@ clean_build() {
     echo "Clean complete."
 }
 
-case "${1:-}" in
-    --help)     show_help ;;
-    --clean)    clean_build ;;
-    --dry-run)  run_dry_run ;;
-    "")         echo "Use --help for usage info" ; exit 1 ;;
-    *)          echo "Unknown option: $1" ; exit 1 ;;
-esac
+ARG="${1:-}"
+if [ "$ARG" = "--help" ]; then
+    show_help
+elif [ "$ARG" = "--clean" ]; then
+    clean_build
+elif [ "$ARG" = "--dry-run" ]; then
+    run_dry_run
+elif [ -z "$ARG" ]; then
+    echo "Use --help for usage info"
+    exit 1
+else
+    echo "Unknown option: $ARG"
+    exit 1
+fi

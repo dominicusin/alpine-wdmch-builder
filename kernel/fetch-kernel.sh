@@ -7,6 +7,11 @@ source config/source-lock.env
 set +a
 
 KERNEL_DIR="${KERNEL_DIR:-.work/monarch-6.18}"
+BUILD_DIR="${BUILD_DIR:-build/kernel}"
+
+# Cross-compilation setup
+CLANG_TARGET="${CLANG_TARGET:-aarch64-linux-gnu}"
+CC="${CCACHE:-ccache} clang"
 
 echo "=== Fetching WDMCH kernel ==="
 echo "Repository: $KERNEL_REPO"

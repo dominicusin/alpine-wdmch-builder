@@ -11,11 +11,30 @@ BUILD_DIR="${BUILD_DIR:-build/kernel}"
 MODULE_STAGE="${MODULE_STAGE:-build/kernel/modules}"
 JOBS="${JOBS:-$(nproc)}"
 
-mkdir -p "$BUILD_DIR" "$MODULE_STAGE"
+# Cross-compilation toolchain setup
+# Use Clang with ccache for reproducible builds
+CLANG_TARGET="${CLANG_TARGET:-aarch64-linux-gnu}"
+CC="${CCACHE:-ccache} clang"
 
-echo "=== Building WDMCH kernel ==="
+# Check for clang
+if ! command -v clang >/dev/null 2>&1; then
+    echo "ERROR: clang not found. Install clang for cross-compilation." >&2
+    exit 1
+fi
+
+# Check for ccache
+if command -v ccache >/dev/null 2>&1; then
+    CCACHE_DIR="${CCACHE_DIR:-build/.ccache}"
+    mkdir -p "$CCACHE_DIR"
+    echo "Using ccache with CCACHE_DIR=$CCACHE_DIR"
+fi
+
+echo "=== Building WDMCH kernel with Clang ==="
 echo "Source: $KERNEL_DIR"
 echo "Build:  $BUILD_DIR"
+echo "Compiler: $CC"
+echo "Target: $CLANG_TARGET"
+echo "Jobs: $JOBS"
 
 # Verify kernel source exists
 if [ ! -f "$KERNEL_DIR/Makefile" ]; then
@@ -25,8 +44,8 @@ fi
 
 # Configure with WDMCH kernel config
 echo "Configuring kernel..."
-make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 olddefconfig < config/kernel.config 2>/dev/null || \
-    make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 olddefconfig
+make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 CROSS_COMPILE="${CLANG_TARGET}-" LLVM=1 LLVM_IAS=1 CC="${CC}" olddefconfig < config/kernel.config 2>/dev/null || \
+    make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 CROSS_COMPILE="${CLANG_TARGET}-" LLVM=1 LLVM_IAS=1 CC="${CC}" olddefconfig
 
 # Verify required config symbols
 echo "Verifying required kernel config symbols..."
@@ -50,22 +69,29 @@ for sym in \
     CONFIG_MMC_BLOCK \
     CONFIG_USB \
     CONFIG_USB_DWC3 \
-    CONFIG_PHYLIB; do
+    CONFIG_PHYLIB \
+    CONFIG_PSI \
+    CONFIG_PREEMPT_BUILD \
+    CONFIG_PREEMPT \
+    CONFIG_PREEMPT_RCU \
+    CONFIG_RCU_EXPERT \
+    CONFIG_RCU_BOOST \
+    CONFIG_RCU_NOCB_CPU; do
     if ! grep -q "^${sym}=y" "$BUILD_DIR/.config" 2>/dev/null; then
         echo "WARNING: $sym not enabled in config" >&2
     fi
 done
 
-# Build kernel image, DTBs, and modules
-echo "Building kernel (this may take a while)..."
-make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 -j"$JOBS" Image dtbs modules
+# Build kernel image, DTBs, and modules using Clang
+echo "Building kernel with Clang (this may take a while)..."
+make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 CROSS_COMPILE="${CLANG_TARGET}-" LLVM=1 LLVM_IAS=1 CC="${CC}" -j"$JOBS" Image dtbs modules
 
 # Install modules
 echo "Installing modules..."
-make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 INSTALL_MOD_PATH="$MODULE_STAGE" modules_install
+make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 CROSS_COMPILE="${CLANG_TARGET}-" LLVM=1 LLVM_IAS=1 CC="${CC}" INSTALL_MOD_PATH="$MODULE_STAGE" modules_install
 
 # Get kernel release
-make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 kernelrelease > "$BUILD_DIR/kernel-release.txt"
+make -C "$KERNEL_DIR" O="$BUILD_DIR" ARCH=arm64 CROSS_COMPILE="${CLANG_TARGET}-" LLVM=1 LLVM_IAS=1 CC="${CC}" kernelrelease > "$BUILD_DIR/kernel-release.txt"
 release=$(cat "$BUILD_DIR/kernel-release.txt")
 echo "Kernel release: $release"
 
