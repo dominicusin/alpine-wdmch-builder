@@ -1,0 +1,50 @@
+# Build outputs
+build/
+.work/
+*.img
+*.tar.xz
+*.tar.gz
+
+# Source clones
+.work/*/
+!work/
+
+# Config secrets
+config/build.env
+config/*.key
+config/*.pem
+
+# OS files
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Results
+*.log
+coverage/
+.nox/
+
+# Kernel build artifacts in source tree
+kernel/
+arch/arm64/
+drivers/
+fs/
+net/
+security/
+sound/
+staging/
+usr/
