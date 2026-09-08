@@ -19,10 +19,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential bc bison flex libssl-dev libelf-dev \
+            clang ccache \
+            binutils-aarch64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev \
             dtc u-boot-tools qemu-user-static qemu-user-binfmt \
             python3 cpio gzip xz-utils \
-            crossbuild-essential-arm64
+            lld
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -33,13 +35,20 @@ jobs:
         run: |
           qemu-user-static --reset -p yes || true
 
-      - name: Configure kernel reference
+      - name: Configure kernel reference and ccache
         run: |
           echo "KERNEL_REF=$(git rev-parse HEAD)" >> config/source-lock.env
+          mkdir -p build/.ccache
+          echo "CCACHE_DIR=build/.ccache" >> config/build.env
           cat config/source-lock.env
 
       - name: Build WDMCH rescue image
         run: |
+          export CC="ccache clang"
+          export CLANG_TARGET="aarch64-linux-gnu"
+          export CROSS_COMPILE="${CLANG_TARGET}-"
+          export LLVM=1
+          export LLVM_IAS=1
           ./build-image.sh --clean
           ./build-image.sh
 
