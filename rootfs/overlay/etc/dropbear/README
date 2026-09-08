@@ -1,0 +1,13 @@
+# Dropbear SSH Configuration for WDMCH Rescue
+
+# Root public-key authentication ONLY
+# No password authentication is configured
+# The authorized_keys file is injected at build time
+
+# To add your SSH public key:
+# 1. Place your public key in: /root/.ssh/authorized_keys
+# 2. Ensure permissions: chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+# 3. Do NOT put a private key on the NAS
+
+# WARNING: Root login via password is disabled by design.
+# Only the injected public key can authenticate.

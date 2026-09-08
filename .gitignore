@@ -1,9 +1,6 @@
 # Build outputs
 build/
 .work/
-*.img
-*.tar.xz
-*.tar.gz
 
 # Source clones
 .work/*/
@@ -39,7 +36,7 @@ coverage/
 .nox/
 
 # Kernel build artifacts in source tree
-kernel/
+# kernel/ scripts are tracked source files; build/ output is ignored
 arch/arm64/
 drivers/
 fs/

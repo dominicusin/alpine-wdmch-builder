@@ -1,0 +1,12 @@
+#!/bin/sh
+# Dropbear init script for Alpine rescue
+
+mkdir -p /etc/dropbear
+chmod 700 /etc/dropbear
+
+# Start dropbear
+if [ -x /usr/sbin/dropbear ]; then
+    exec /usr/sbin/dropbear -F -p 22 -s
+elif [ -x /usr/bin/dropbear ]; then
+    exec /usr/bin/dropbear -F -p 22 -s
+fi

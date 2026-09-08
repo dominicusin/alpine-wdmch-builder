@@ -1,0 +1,48 @@
+#!/bin/sh
+# WDMCH Rescue Init - PID 1
+# This init runs as PID 1 in the rescue initramfs
+
+set -e
+
+echo "=== WDMCH Rescue Init ==="
+
+# Mount basic filesystems
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t tmpfs tmpfs /tmp 2>/dev/null || true
+
+# Mount firmware if available
+mount -t configfs configfs /sys/kernel/config 2>/dev/null || true
+
+# Load required modules
+if [ -d /lib/modules ]; then
+    for mod in ahci sata_sil24 r8169 rtd129x-sata rtd129x-phy usbcore dwc3; do
+        modprobe "$mod" 2>/dev/null || true
+    done
+fi
+
+# Bring up Ethernet
+ip link set eth0 up 2>/dev/null || true
+
+# Try DHCP
+if command -v udhcpc >/dev/null 2>&1; then
+    echo "Attempting DHCP on eth0..."
+    udhcpc -i eth0 -t 10 -n || echo "DHCP failed, continuing to shell"
+elif command -v dhcpcd >/dev/null 2>&1; then
+    dhcpcd eth0 || echo "DHCP failed, continuing to shell"
+fi
+
+# Start Dropbear SSH if available
+if [ -x /usr/sbin/dropbear ]; then
+    echo "Starting Dropbear SSH..."
+    /usr/sbin/dropbear -F -p 22 -s &
+elif [ -x /usr/bin/dropbear ]; then
+    /usr/bin/dropbear -F -p 22 -s &
+fi
+
+# Print IP information
+ip addr show eth0 2>/dev/null || true
+
+echo "=== Rescue shell ==="
+exec sh

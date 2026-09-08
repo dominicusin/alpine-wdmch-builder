@@ -1,0 +1,10 @@
+# Network interfaces for WDMCH rescue
+# The WDMCH GMAC (r8169soc) appears as eth0
+
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+    pre-up ip link set eth0 up
+    post-down ip link set eth0 down
