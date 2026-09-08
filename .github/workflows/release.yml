@@ -55,7 +55,7 @@ jobs:
             build/release/rescue.root.sata.cpio.gz_pad.img
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             alpine-wdmch-rescue-*.tar.xz
