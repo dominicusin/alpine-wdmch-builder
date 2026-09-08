@@ -1,0 +1,14 @@
+{
+  "device": "WD My Cloud Home single-bay",
+  "soc": "Realtek RTD1295",
+  "arch": "aarch64",
+  "kernel": "Linux 6.18.x",
+  "kernel_commit": "",
+  "kernel_release": "",
+  "dtb": "rtd1295-wd-mycloud-home.dtb",
+  "boot_artifacts": [
+    "sata.uImage",
+    "rescue.sata.dtb",
+    "rescue.root.sata.cpio.gz_pad.img"
+  ]
+}

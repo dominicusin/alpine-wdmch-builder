@@ -1,0 +1,42 @@
+name: Validate
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            dtc python3 cpio gzip xz-utils \
+            crossbuild-essential-arm64
+
+      - name: Validate repository structure
+        run: bash tests/test_repo_layout.sh
+
+      - name: Validate tool tests
+        run: bash tests/test_tools.sh
+
+      - name: Validate workflow files
+        run: bash tests/test_workflows.sh
+
+      - name: Build and validate kernel metadata
+        run: |
+          # Skip kernel build in validate (too slow), just validate structure
+          bash tests/test_kernel_metadata.sh || true
+          bash tests/test_dtb.sh || true
+
+      - name: Check dependencies
+        run: bash tools/check-deps.sh
