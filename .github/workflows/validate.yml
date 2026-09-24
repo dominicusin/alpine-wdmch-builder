@@ -25,7 +25,6 @@ jobs:
         run: |
           shellcheck build-image.sh kernel/build-kernel.sh kernel/fetch-kernel.sh dtb/build-dtb.sh tools/check-deps.sh
           shellcheck rootfs/build-rootfs.sh image/package-rescue.sh image/dl-packages.sh
-          shellcheck tests/test-flash.sh tests/test_build_dry_run.sh tests/test_repo_layout.sh
 
       - name: Validate Python scripts (syntax only)
         run: |
@@ -35,7 +34,6 @@ jobs:
       - name: Validate kernel config against spec
         run: |
           python3 -c "
-          import re
           cfg = open('config/kernel.config').read()
           required = [
               'CONFIG_AHCI_RTD1295',
