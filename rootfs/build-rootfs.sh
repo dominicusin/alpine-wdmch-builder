@@ -97,11 +97,11 @@ done
 # Keep only what the rescue uses; drop docs/dev/engines and the shared
 # libcrypto/libssl (Alpine's dropbear is statically linked against
 # libcrypto - its only NEEDED libs are libz, libutmps and musl).
-rm -rf "$ROOT/usr/share" "$ROOT/usr/include" "$ROOT/etc/ssl" \
-       "$ROOT/usr/lib/engines-3" "$ROOT/usr/lib/ossl-modules" \
-       "$ROOT/usr/lib/libcrypto.so.3" "$ROOT/usr/lib/libssl.so.3" \
-       "$ROOT/usr/lib/libutmps.a" "$ROOT/etc/logrotate.d" \
-       "$ROOT/sbin/apk.static.SIGN.RSA*" "$ROOT/.SIGN.RSA*" "$ROOT/.PKGINFO"
+rm -rf "${ROOT:?}/usr/share" "${ROOT:?}/usr/include" "${ROOT:?}/etc/ssl" \
+       "${ROOT:?}/usr/lib/engines-3" "${ROOT:?}/usr/lib/ossl-modules" \
+       "${ROOT:?}/usr/lib/libcrypto.so.3" "${ROOT:?}/usr/lib/libssl.so.3" \
+       "${ROOT:?}/usr/lib/libutmps.a" "${ROOT:?}/etc/logrotate.d" \
+       "${ROOT:?}/sbin/apk.static.SIGN.RSA*" "${ROOT:?}/.SIGN.RSA*" "${ROOT:?}/.PKGINFO"
 
 # busybox: single static binary + applet symlinks
 install -m 755 "$ROOT/bin/busybox.static" "$ROOT/bin/busybox"
