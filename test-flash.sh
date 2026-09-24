@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Полное тестирование flash.zip
+# Полное тестирование flash.zip (локально и в CI)
 set -euo pipefail
 
-PROJ="/home/dominicusin/src/alpine-wdmch-builder"
+PROJ="$(cd "$(dirname "$0")" && pwd)"
 ZIPFILE="$PROJ/build/flash.zip"
+WORKDIR=""
 
-cleanup() { rm -rf "$TMPDIR" /tmp/test_key_* /tmp/cpio_err_* 2>/dev/null; }
+cleanup() {
+    [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"
+    rm -f /tmp/test_key_* /tmp/cpio_err_* 2>/dev/null || true
+}
 trap cleanup EXIT
 
 echo "=========================================="
@@ -15,10 +19,11 @@ echo ""
 
 # 1. Извлечение
 echo "[1/7] Извлечение flash.zip..."
-mkdir -p "$TMPDIR"
-cd "$TMPDIR"
+[ -f "$ZIPFILE" ] || { echo "      FAIL: $ZIPFILE не найден"; exit 1; }
+WORKDIR="$(mktemp -d)"
+cd "$WORKDIR"
 unzip -q "$ZIPFILE"
-echo "      Извлечено в $TMPDIR"
+echo "      Извлечено в $WORKDIR"
 
 # 2. Дерево
 echo ""
@@ -66,7 +71,7 @@ echo "      Всего APK-файлов: $((main_count + comm_count))"
 # 6. Checksums
 echo ""
 echo "[6/7] Проверка контрольных сумм SHA256:"
-cd "$TMPDIR"
+cd "$WORKDIR"
 sha256sum -c SHA256SUMS
 echo "      Все checksums валидны"
 
@@ -75,8 +80,9 @@ echo ""
 echo "[7/7] Проверка SSH-ключа в initramfs:"
 SRC_CPIO="$PROJ/build/usb-tree-root/rescue.root.sata.cpio.gz_pad.img"
 echo "      Источник: $SRC_CPIO"
+[ -f "$SRC_CPIO" ] || { echo "      FAIL: $SRC_CPIO не найден"; exit 1; }
 
-TMP_KEY="/tmp/test_key_$$"
+TMP_KEY="$(mktemp /tmp/test_key_XXXXXX)"
 zcat "$SRC_CPIO" 2>/dev/null | cpio -i --to-stdout root/.ssh/authorized_keys 2>/dev/null > "$TMP_KEY"
 
 if [ ! -s "$TMP_KEY" ]; then
@@ -85,18 +91,25 @@ if [ ! -s "$TMP_KEY" ]; then
 fi
 
 echo "      Извлечено байт: $(wc -c < "$TMP_KEY")"
-echo "      Содержимое: $(cat "$TMP_KEY" | head -c 50)..."
+echo "      Содержимое: $(head -c 50 "$TMP_KEY")..."
 
-USER_KEY="$HOME/.ssh/id_ed25519.pub"
-if [ ! -f "$USER_KEY" ]; then
-    echo "      FAIL: пользовательский ключ ~/.ssh/id_ed25519.pub не найден"
-    rm -f "$TMP_KEY"
+# Эталон: WDMCH_SSH_AUTHORIZED_KEY (CI) или ~/.ssh/id_ed25519.pub (локально)
+if [ -n "${WDMCH_SSH_AUTHORIZED_KEY:-}" ]; then
+    REF_KEY="$(mktemp /tmp/test_key_ref_XXXXXX)"
+    printf '%s\n' "$WDMCH_SSH_AUTHORIZED_KEY" > "$REF_KEY"
+elif [ -f "${HOME:-}/.ssh/id_ed25519.pub" ]; then
+    REF_KEY="${HOME}/.ssh/id_ed25519.pub"
+else
+    echo "      FAIL: нет эталонного ключа (WDMCH_SSH_AUTHORIZED_KEY или ~/.ssh/id_ed25519.pub)"
     exit 1
 fi
 
-echo "      Пользовательский ключ: $(cat "$USER_KEY" | head -c 50)..."
+echo "      Эталонный ключ: $(head -c 50 "$REF_KEY")..."
 
-if cmp "$TMP_KEY" "$USER_KEY" > /dev/null 2>&1; then
+# Сравниваем только сами ключи (тип + base64), игнорируя комментарий
+key_body() { awk '{print $1" "$2}' "$1"; }
+
+if [ "$(key_body "$TMP_KEY")" = "$(key_body "$REF_KEY")" ]; then
     echo "      PASS: SSH-ключи идентичны"
 else
     echo "      FAIL: SSH-ключи РАЗЛИЧНЫ"
@@ -104,12 +117,12 @@ else
     echo "      Извлечённый из initramfs:"
     cat "$TMP_KEY"
     echo ""
-    echo "      Пользовательский ~/.ssh/id_ed25519.pub:"
-    cat "$USER_KEY"
-    rm -f "$TMP_KEY"
+    echo "      Эталонный:"
+    cat "$REF_KEY"
     exit 1
 fi
 rm -f "$TMP_KEY"
+[ -f /tmp/test_key_ref_* ] && rm -f /tmp/test_key_ref_* || true
 
 echo ""
 echo "=========================================="
@@ -124,7 +137,7 @@ echo "  SHA256SUMS                      — контрольные суммы"
 echo "  manifest.json                   — метаданные"
 echo "  README.txt                      — инструкция"
 echo ""
-echo "  apks/main/                      — $(find apks/main -name '*.apk' | wc -l) пакетов Alpine v3.21.8"
+echo "  apks/main/                      — $(find apks/main -name '*.apk' | wc -l) пакетов Alpine"
 echo "  apks/community/                 — $(find apks/community -name '*.apk' | wc -l) пакетов"
 echo ""
 echo "Флешка: FAT32 + распакованный flash.zip"
