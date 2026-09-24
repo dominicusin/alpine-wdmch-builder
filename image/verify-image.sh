@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 RELEASE_DIR="${RELEASE_DIR:-build/release}"
+BUILD_DIR="${BUILD_DIR:-build/kernel}"
 
 echo "=== Verifying WDMCH USB rescue artifacts ==="
 
@@ -54,7 +55,7 @@ fi
 python3 -c "
 import struct
 b = open('$RELEASE_DIR/rescue.sata.dtb', 'rb').read()
-magic = struct.unpack_from('<I', b, 0)[0]
+magic = struct.unpack_from('>I', b, 0)[0]
 assert magic == 0xd00dfeed, f'Bad FDT magic: 0x{magic:08X}'
 print('DTB FDT magic verified')
 "

@@ -4,6 +4,9 @@ set -Eeuo pipefail
 KERNEL_DIR="${KERNEL_DIR:-.work/monarch-6.18}"
 BUILD_DIR="${BUILD_DIR:-build/kernel}"
 
+# Ensure dtc is in PATH (built as host tool during kernel build)
+export PATH="$PWD/.work/monarch-6.18/scripts/dtc:$PWD/scripts/dtc:$PATH"
+
 echo "=== Building WDMCH DTB ==="
 
 # Find WDMCH DTS in kernel source

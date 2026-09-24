@@ -18,7 +18,7 @@ grep -q 'r8169soc' "$DTS" || true  # May be named differently
 python3 - "$DTB" <<'PY'
 import struct, sys
 b = open(sys.argv[1], 'rb').read()
-magic = struct.unpack_from('<I', b, 0)[0]
+magic = struct.unpack_from('>I', b, 0)[0]
 assert magic == 0xd00dfeed, f'Bad FDT magic: 0x{magic:08X}'
 totalsize = struct.unpack_from('>I', b, 4)[0]
 print(f'FDT magic verified: 0xd00dfeed')

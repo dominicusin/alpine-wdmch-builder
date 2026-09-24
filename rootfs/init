@@ -1,48 +1,147 @@
 #!/bin/sh
 # WDMCH Rescue Init - PID 1
-# This init runs as PID 1 in the rescue initramfs
+#
+# Runs from rescue.root.sata.cpio.gz_pad.img (fixed 4 MiB budget).
+# All storage/net drivers are built into the kernel; nothing to insmod.
+#
+# Flow (informed by symops/monarch-6.18 initramfs/init):
+#   1. console + mounts + mdev
+#   2. USB VBUS enable (raw MMIO pokes - no RTD129x clk/gpio driver exists)
+#   3. wait for the SATA disk to link (ahci_rtd1295 is slow to negotiate)
+#   4. mount the rescue USB stick (apks/ for the offline installer)
+#   5. DHCP on eth0
+#   6. dropbear SSH (public-key only)
+#   7. interactive shell on the serial console, respawned on exit
 
-set -e
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/sbin
+
+# --- console -------------------------------------------------------------------
+mkdir -p /dev
+[ -c /dev/console ] || mknod /dev/console c 5 1
+[ -c /dev/null ] || mknod /dev/null c 1 3
+exec </dev/console >/dev/console 2>&1
 
 echo "=== WDMCH Rescue Init ==="
+echo "kernel: $(uname -r)"
 
-# Mount basic filesystems
+# --- mounts --------------------------------------------------------------------
+mkdir -p /proc /sys /tmp /run /mnt /media/usb
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mount -t tmpfs tmpfs /tmp 2>/dev/null || true
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null || true
 
-# Mount firmware if available
-mount -t configfs configfs /sys/kernel/config 2>/dev/null || true
+# --- dynamic device nodes (busybox mdev) ----------------------------------------
+echo /bin/mdev > /proc/sys/kernel/hotplug 2>/dev/null || true
+mdev -s 2>/dev/null || true
 
-# Load required modules
-if [ -d /lib/modules ]; then
-    for mod in ahci sata_sil24 r8169 rtd129x-sata rtd129x-phy usbcore dwc3; do
-        modprobe "$mod" 2>/dev/null || true
+# --- USB VBUS: no RTD129x clk/gpio driver in this kernel, so open the USB
+# clock gate (CRT 0x0c bit4) and drive port-power GPIO (misc-gpio 19) by hand.
+# Same registers monarch's init pokes; xhci is hotplug-capable, late VBUS ok.
+# busybox-static has no devmem applet -> /dev/mem via dd + od. ------------------
+mem_or32() {
+    # mem_or32 <phys-addr-decimal> <or-mask>
+    addr_dec="$1"; mask="$2"
+    cur=$(dd if=/dev/mem bs=4 count=1 skip=$((addr_dec / 4)) 2>/dev/null \
+          | od -An -tu4 | tr -d ' \n')
+    [ -n "$cur" ] || return 1
+    printf '%08x' $((cur | mask)) \
+      | sed 's/\(..\)\(..\)\(..\)\(..\)/\4\3\2\1/' \
+      | xxd -r -p \
+      | dd of=/dev/mem bs=4 count=1 seek=$((addr_dec / 4)) conv=notrunc 2>/dev/null
+}
+
+echo "[init] enabling USB power (CRT clk gate + misc-gpio 19)..."
+mem_or32 $((0x9800000C)) $((0x10))     || echo "[init] WARN: CRT clk poke failed"
+mem_or32 $((0x9801B100)) $((0x80000))  || echo "[init] WARN: gpio dir poke failed"
+mem_or32 $((0x9801B110)) $((0x80000))  || echo "[init] WARN: gpio out poke failed"
+
+# --- wait for the SATA disk ------------------------------------------------------
+# host1/host2 are ahci_rtd1295's fixed SCSI host numbers (from monarch).
+echo "[init] waiting for SATA disk to link..."
+i=0
+while [ $i -lt 15 ]; do
+    if [ -e /sys/bus/scsi/devices/1:0:0:0 ] || [ -e /sys/bus/scsi/devices/2:0:0:0 ]; then
+        echo "[init] SATA disk present after ${i}s"
+        sleep 1
+        break
+    fi
+    sleep 1
+    i=$((i + 1))
+done
+echo "[init] block devices:"
+cat /proc/partitions
+
+# --- mount the rescue USB stick ---------------------------------------------------
+# apks/ (offline Alpine packages) and boot/ live on the FAT stick.
+usb_mounted=""
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    for dev in /dev/sd?1 /dev/sd?2 /dev/sd?3; do
+        [ -b "$dev" ] || continue
+        if mount -t vfat -o ro "$dev" /media/usb 2>/dev/null; then
+            if [ -d /media/usb/apks ] || [ -d /media/usb/boot ]; then
+                usb_mounted="$dev"
+                break 2
+            fi
+            umount /media/usb 2>/dev/null
+        fi
     done
+    sleep 1
+done
+if [ -n "$usb_mounted" ]; then
+    echo "[init] rescue USB mounted ($usb_mounted -> /media/usb)"
+else
+    echo "[init] WARNING: rescue USB stick not found under /media/usb"
 fi
 
-# Bring up Ethernet
-ip link set eth0 up 2>/dev/null || true
+# --- network: DHCP on eth0 ---------------------------------------------------------
+ifconfig lo 127.0.0.1 up 2>/dev/null || true
+ifconfig eth0 up 2>/dev/null || true
+echo "[init] requesting a DHCP lease on eth0..."
+udhcpc -i eth0 -s /usr/share/udhcpc/default.script -t 10 -T 2 -A 3 -n -q 2>/dev/null \
+    || echo "[init] DHCP failed"
 
-# Try DHCP
-if command -v udhcpc >/dev/null 2>&1; then
-    echo "Attempting DHCP on eth0..."
-    udhcpc -i eth0 -t 10 -n || echo "DHCP failed, continuing to shell"
-elif command -v dhcpcd >/dev/null 2>&1; then
-    dhcpcd eth0 || echo "DHCP failed, continuing to shell"
+addr=$(ifconfig eth0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p' | head -1)
+[ -n "$addr" ] || addr=$(ifconfig eth0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
+if [ -z "$addr" ]; then
+    echo "[init] no DHCP lease; fallback 192.168.1.222/24"
+    ifconfig eth0 192.168.1.222 netmask 255.255.255.0 up 2>/dev/null
+    addr=192.168.1.222
 fi
 
-# Start Dropbear SSH if available
+# --- dropbear SSH (public-key only; -R generates host keys on first boot) ---------
+mkdir -p /etc/dropbear /var/log
 if [ -x /usr/sbin/dropbear ]; then
-    echo "Starting Dropbear SSH..."
-    /usr/sbin/dropbear -F -p 22 -s &
-elif [ -x /usr/bin/dropbear ]; then
-    /usr/bin/dropbear -F -p 22 -s &
+    echo "[init] starting dropbear on :22 (public-key auth only)"
+    /usr/sbin/dropbear -R -E -p 22 -s &
 fi
 
-# Print IP information
-ip addr show eth0 2>/dev/null || true
+# --- banner ------------------------------------------------------------------------
+IPFILE=/run/rescue-ip
+echo "$addr" > "$IPFILE"
+echo ""
+echo "========================================================"
+echo " WDMCH Rescue - WD My Cloud Home (RTD1295 / $(uname -r))"
+echo "========================================================"
+echo " SSH:    ssh root@$addr      (public-key only, no password)"
+echo " USB:    ${usb_mounted:-not found} -> /media/usb"
+echo " Disks:  $(grep -c . /proc/partitions) partition entries (see /proc/partitions)"
+echo ""
+echo " Install Alpine Linux to the internal SATA disk:"
+echo "   install-alpine /dev/sda          # interactive, offline (USB apks)"
+echo "   install-alpine /dev/sda --yes    # non-interactive"
+echo "========================================================"
+echo ""
 
-echo "=== Rescue shell ==="
-exec sh
+# --- check for rootfs on internal disk ---
+if [ -x /etc/init.d/99-disk-root ]; then
+    /etc/init.d/99-disk-root
+fi
+# --- interactive shell on the serial console, respawned on exit ---------------------
+while true; do
+    setsid sh -c 'exec sh </dev/console >/dev/console 2>&1'
+    echo "[init] console shell exited; restarting in 3s"
+    sleep 3
+done

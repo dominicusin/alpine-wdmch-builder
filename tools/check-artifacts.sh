@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 RELEASE_DIR="${1:-build/release}"
+BUILD_DIR="${BUILD_DIR:-build/kernel}"
 
 echo "=== Artifact Validation ==="
 

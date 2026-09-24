@@ -1,78 +1,189 @@
-name: Build
+name: WDMCH Rescue Build
+
 on:
   push:
     branches: [main, master]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# WDMCH_SSH_AUTHORIZED_KEY: the operator's ed25519 public key
+# (set in GitHub repo Settings → Secrets → Actions)
+env:
+  KERNEL_DIR: .work/monarch-6.18
+  BUILD_DIR: build/kernel
+  RELEASE_DIR: build/release
+  USB_TREE: build/usb-tree-root
+  ALPINE_VERSION: "3.21"
+  ALPINE_ARCH: aarch64
+
 jobs:
   build:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      packages: read
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Restore ccache
+      - name: Cache kernel build
         uses: actions/cache@v4
         with:
-          path: build/.ccache
-          key: ccache-${{ github.sha }}
+          path: |
+            .work/monarch-6.18/arch/arm64/boot/Image
+            .work/monarch-6.18/arch/arm64/boot/.config
+            .work/monarch-6.18/scripts/dtc/*.dtb
+          key: kernel-${{ hashFiles('.work/monarch-6.18/arch/arm64/configs/*.config') }}
           restore-keys: |
-            ccache-
+            kernel-
 
-      - name: Install dependencies
+      - name: Cache Alpine APKINDEX
+        uses: actions/cache@v4
+        with:
+          path: .work/apk-cache-offline
+          key: apkindex-${{ env.ALPINE_VERSION }}-${{ env.ALPINE_ARCH }}
+          restore-keys: |
+            apkindex-${{ env.ALPINE_VERSION }}-
+
+      - name: Install build dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu \
             ccache \
-            qemu-user qemu-user-static \
-            device-tree-compiler u-boot-tools \
-            python3 cpio gzip xz-utils \
+            device-tree-compiler \
+            python3 \
+            cpio \
+            gzip \
+            xz-utils \
             binutils-aarch64-linux-gnu \
-            zip
+            zip \
+            curl \
+            file \
+            qemu-user qemu-user-static
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
-      - name: Configure kernel reference and ccache
+      - name: Configure ccache
         run: |
-          echo "KERNEL_REF=$(git rev-parse HEAD)" >> config/source-lock.env
           mkdir -p build/.ccache
-          echo "CCACHE_DIR=build/.ccache" >> config/build.env
-          echo "CCACHE_COMPILERCHECK=content" >> config/build.env
+          echo "CCACHE_DIR=build/.ccache" >> build/ccache.env
+          echo "CCACHE_COMPILERCHECK=content" >> build/ccache.env
           ccache --max-size=2G
-          ccache --show-stats
-          cat config/source-lock.env
+          ccache --show-stats || true
 
-      - name: Build WDMCH rescue image
+      - name: Build kernel (Image + DTB)
         run: |
+          set -a
+          source config/alpine.env
+          set +a
           export CC="ccache aarch64-linux-gnu-gcc"
           export CROSS_TARGET="aarch64-linux-gnu"
           export CROSS_COMPILE="${CROSS_TARGET}-"
-          # Uses GNU ld via aarch64-linux-gnu-gcc
-          ./build-image.sh --help
-          ./build-image.sh --dry-run
-          ./build-image.sh --clean
-          ./build-image.sh
+          export PATH="/usr/bin:$PATH"
+          bash kernel/build-kernel.sh
+          echo "Kernel built: $(cat build/kernel/kernel-release.txt)"
+
+      - name: Verify kernel artifacts
+        run: |
+          echo "=== Image ==="
+          file build/kernel/Image
+          python3 -c "
+          import struct
+          d=open('build/kernel/Image','rb').read(32)
+          code0=struct.unpack('<I',d[2:6])[0]
+          text_off=struct.unpack('<I',d[8:12])[0]
+          print(f'  code0=0x{code0:08x}  text_offset=0x{text_off:08x}')
+          assert code0==0x91005A4D, f'code0 mismatch: 0x{code0:08x}'
+          assert text_off==0x200000, f'text_offset mismatch: 0x{text_off:08x}'
+          print('  PASS')
+          "
+          echo "=== DTB ==="
+          python3 -c "
+          d=open('build/kernel/rtd1295-wd-mycloud-home.dtb','rb').read(4)
+          magic=int.from_bytes(d,'big')
+          print(f'  FDT magic: 0x{magic:08x}')
+          assert magic==0xd00dfeed, f'FDT magic mismatch: 0x{magic:08x}'
+          print('  PASS')
+          "
+          echo "=== kernel-release.txt ==="
+          cat build/kernel/kernel-release.txt
+
+      - name: Build rescue initramfs
+        run: |
+          bash rootfs/build-rootfs.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
+          SIZE=$(stat -c%s build/kernel/rescue.root.sata.cpio.gz_pad.img)
+          echo "Initramfs size: $SIZE bytes ($(echo "scale=2; $SIZE/1048576" | bc) MiB)"
+          [ "$SIZE" -eq 4194304 ] || { echo "FAIL: size $SIZE != 4194304"; exit 1; }
+          echo "PASS: initramfs is exactly 4 MiB"
+
+      - name: Verify initramfs contents
+        run: |
+          echo "=== Key files ==="
+          zcat build/kernel/rescue.root.sata.cpio.gz_pad.img 2>/dev/null | cpio -t 2>/dev/null | grep -E 'dropbear|authorized_keys|bin/busybox|init$|install-alpine' | sort
+          echo ""
+          echo "=== SSH key ==="
+          zcat build/kernel/rescue.root.sata.cpio.gz_pad.img 2>/dev/null | cpio -i --to-stdout root/.ssh/authorized_keys 2>/dev/null | head -c 60
+          echo ""
+          echo "=== busybox static? ==="
+          zcat build/kernel/rescue.root.sata.cpio.gz_pad.img 2>/dev/null | cpio -i --to-stdout bin/busybox 2>/dev/null > /tmp/busybox-extracted
+          file /tmp/busybox-extracted
+          rm -f /tmp/busybox-extracted
+
+      - name: Package rescue artifacts + flash.zip
+        env:
+          WDMCH_SSH_AUTHORIZED_KEY: ${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}
+        run: |
+          bash image/package-rescue.sh
+          echo ""
+          echo "=== sata.uImage ==="
+          python3 -c "
+          import struct, os
+          d=open('build/release/sata.uImage','rb').read(32)
+          code0=struct.unpack('<I',d[2:6])[0]
+          text_off=struct.unpack('<I',d[8:12])[0]
+          sz=os.path.getsize('build/release/sata.uImage')
+          print(f'  size={sz} code0=0x{code0:08x} text_offset=0x{text_off:08x}')
+          assert code0==0x91005A4D
+          assert text_off==0x200000
+          # padding check: last 512 KiB must be zero
+          pad=512*1024
+          last=open('build/release/sata.uImage','rb').read()[-pad:]
+          nulls=sum(1 for b in last if b==0)
+          print(f'  padding: {nulls}/{pad} zero bytes ({100*nulls/pad:.1f}%)')
+          assert nulls==pad, 'padding not zero'
+          print('  PASS')
+          "
 
       - name: Run validation tests
         run: |
-          bash tests/test_tools.sh
-          bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
+          echo "=== test-flash.sh ==="
+          bash test-flash.sh
 
-      - name: Upload artifacts
+      - name: Upload flash.zip artifact
         uses: actions/upload-artifact@v7
         if: github.ref_type != 'tag'
         with:
-          name: wdmch-rescue-artifacts
+          name: wdmch-rescue-flash
+          path: build/flash.zip
+          retention-days: 30
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        if: github.ref_type == 'tag'
+        with:
+          name: wdmch-rescue-release
           path: |
-            build/release/*
-            SHA256SUMS
-            manifest.json
+            build/flash.zip
+            build/release/SHA256SUMS
+            build/release/manifest.json
+          retention-days: 90
 
   release:
     needs: build
@@ -84,107 +195,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Restore ccache
-        uses: actions/cache@v4
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
         with:
-          path: build/.ccache
-          key: ccache-${{ github.sha }}
-          restore-keys: |
-            ccache-
+          name: wdmch-rescue-release
+          path: release-artifacts
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu \
-            ccache \
-            qemu-user qemu-user-static \
-            device-tree-compiler u-boot-tools \
-            python3 cpio gzip xz-utils \
-            binutils-aarch64-linux-gnu \
-            zip
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
-      - name: Configure kernel reference and ccache
-        run: |
-          echo "KERNEL_REF=$(git rev-parse HEAD)" >> config/source-lock.env
-          mkdir -p build/.ccache
-          echo "CCACHE_DIR=build/.ccache" >> config/build.env
-          echo "CCACHE_COMPILERCHECK=content" >> config/build.env
-          ccache --max-size=2G
-          ccache --show-stats
-          cat config/source-lock.env
-
-      - name: Set up SSH authorized key
-        run: |
-          if [ -z "${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}" ]; then
-            echo "ERROR: WDMCH_SSH_AUTHORIZED_KEY is required for release builds" >&2
-            exit 1
-          fi
-          mkdir -p rootfs/overlay/root/.ssh
-          echo "${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}" > rootfs/overlay/root/.ssh/authorized_keys
-          chmod 700 rootfs/overlay/root/.ssh
-          chmod 600 rootfs/overlay/root/.ssh/authorized_keys
-          echo "SSH authorized key configured"
-
-      - name: Build complete image
-        run: |
-          export CC="ccache aarch64-linux-gnu-gcc"
-          export CROSS_TARGET="aarch64-linux-gnu"
-          export CROSS_COMPILE="${CROSS_TARGET}-"
-          ./build-image.sh --clean
-          ./build-image.sh
-
-      - name: Run all tests
-        run: |
-          bash tests/test_tools.sh
-          bash tests/test_workflows.sh
-          bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
-
-      - name: Create release archive
-        run: |
-          VERSION=$(cat VERSION)
-          # Create full release archive
-          tar -cJf "alpine-wdmch-rescue-${VERSION}.tar.xz" \
-            --exclude='.git' \
-            --exclude='*.pyc' \
-            build/release/
-          # Create release zip of USB flash contents
-          cd build/release
-          zip -j "../../alpine-wdmch-rescue-${VERSION}-flash.zip" \
-            sata.uImage \
-            rescue.sata.dtb \
-            rescue.root.sata.cpio.gz_pad.img \
-            SHA256SUMS \
-            manifest.json
-          cd ../..
-
-      - name: Publish GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            alpine-wdmch-rescue-*-flash.zip
-            SHA256SUMS
-            manifest.json
+            release-artifacts/flash.zip
+            release-artifacts/SHA256SUMS
+            release-artifacts/manifest.json
           body: |
-            # WDMCH Alpine Rescue Image v${VERSION}
+            # WDMCH Alpine Rescue Image ${{ github.ref_name }}
+
             ## Device
             - WD My Cloud Home (single-bay)
-            - Realtek RTD1295
-            - ARM64 / aarch64
-            ## Artifacts
-            See [docs/usb-rescue.md](docs/usb-rescue.md) for USB boot instructions.
+            - Realtek RTD1295, ARM64 / aarch64
+
+            ## Boot
+            - Insert FAT32 USB stick with flash.zip contents at root
+            - Hold reset button, power on, hold ~10 seconds
+            - ssh root@<device-ip> (public-key auth, no password)
+
+            ## Install Alpine Linux
+            - ssh root@<device-ip>
+            - install-alpine /dev/sda    # interactive
+            - install-alpine /dev/sda --yes   # non-interactive
+
+            ## SSH key
+            - Root login uses public-key authentication only
+            - Key must be set via WDMCH_SSH_AUTHORIZED_KEY secret
+
             ## Security
-            - Root SSH uses public-key authentication only
-      - name: Upload release assets
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          asset_path: alpine-wdmch-rescue-${{ github.ref_name }}-flash.zip
-          asset_name: alpine-wdmch-rescue-${{ github.ref_name }}-flash.zip
-          asset_content_type: application/zip
+            - Vendor firmware (A/B/GOLD) never touched
+            - install-alpine ERASES the internal disk

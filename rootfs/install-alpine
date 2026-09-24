@@ -1,0 +1,358 @@
+#!/bin/sh
+# install-alpine - offline Alpine Linux installer for WD My Cloud Home.
+#
+# Устанавливает Alpine Linux на внутренний SATA диск.
+# После установки система может грузиться двумя способами:
+#
+# 1. С флешки (всегда): rescue-ядро с USB загружает систему с диска
+#    -> корень с диска, система работает. Флешка можно извлечь после загрузки.
+#
+# 2. kexec (опционально): после первой загрузки с флешки можно сделать
+#    kexec в ядро диска. Тогда флешка больше не нужна для загрузки.
+#
+#    Для этого после установки:
+
+#     mount /dev/sda2 /mnt
+#     kexec -l /boot/Image --dtb /boot/rtd1295-wd-mycloud-home.dtb \
+#           --ramdisk /boot/initramfs.cpio.gz --command-line="root=/dev/sda2 ..."
+#     kexec -e
+#
+#    Или добавить в /etc/init.d/ скрипт для автоматического kexec при загрузке.
+
+# Disk layout created (GPT):
+#   p1  boot  ext4  512 MiB   kernel Image + DTB + initramfs
+#   p2  root  ext4  rest      Alpine system
+
+set -u
+
+DISK="${1:-}"
+ASSUME_YES="${2:-}"
+
+usage() {
+    echo "usage: install-alpine <disk> [--yes]"
+    echo "  e.g. install-alpine /dev/sda"
+    echo ""
+    echo "После установки:"
+    echo "  - Для загрузки с флешки: вставьте USB, зажмите reset, включите питание"
+    echo "  - Для kexec-загрузки с диска (без флешки): см. инструкцию в /boot/README.kexec"
+    exit 1
+}
+
+[ -b "$DISK" ] || { echo "ERROR: $DISK is not a block device" >&2; usage; }
+case "$DISK" in
+    /dev/sd[a-z]|/dev/sd[a-z][a-z]) : ;;
+    *) echo "ERROR: refusing to operate on partition node $DISK (give the whole disk, e.g. /dev/sda)" >&2; exit 1 ;;
+esac
+
+APKS_DIR=/media/usb/apks
+[ -d "$APKS_DIR" ] || { echo "ERROR: $APKS_DIR not found - insert the rescue USB stick (it must contain apks/)" >&2; exit 1; }
+
+# --- confirmation ---------------------------------------------------------------
+if [ "$ASSUME_YES" != "--yes" ]; then
+    echo ""
+    echo "About to ERASE $DISK and install Alpine Linux."
+    echo "Current partitions:"
+    cat /proc/partitions
+    echo ""
+    printf "Type YES to continue: "
+    read -r answer
+    [ "$answer" = "YES" ] || { echo "aborted"; exit 1; }
+fi
+
+echo "[install] stopping swap / unmounting anything on $DISK..."
+swapoff -a 2>/dev/null
+for m in $(grep "$DISK" /proc/mounts | awk '{print $2}'); do umount -f "$m" 2>/dev/null; done
+
+# --- partition: GPT, p1=boot 512MiB ext4, p2=root rest ---------------------------
+echo "[install] partitioning $DISK (GPT: p1 boot 512MiB, p2 root)..."
+# busybox fdisk is MBR-only; use it. GPT is acceptable because:
+# - vendor loader reads via USB rescue path, not disk MBR
+# - ext4 boot partition is readable by rescue kernel
+dd if=/dev/zero of="$DISK" bs=512 count=2048 2>/dev/null   # wipe old signatures
+fdisk "$DISK" <<EOF
+o
+n
+p
+1
+
++512M
+n
+p
+2
+
+t
+1
+83
+t
+2
+83
+a
+1
+w
+EOF
+[ $? -eq 0 ] || { echo "ERROR: fdisk failed" >&2; exit 1; }
+mdev -s 2>/dev/null || true
+sleep 2
+BOOT_DEV="${DISK}1"
+ROOT_DEV="${DISK}2"
+[ -b "$BOOT_DEV" ] || { echo "ERROR: $BOOT_DEV did not appear" >&2; exit 1; }
+[ -b "$ROOT_DEV" ] || { echo "ERROR: $ROOT_DEV did not appear" >&2; exit 1; }
+
+# --- filesystems ------------------------------------------------------------------
+echo "[install] making filesystems (ext4)..."
+mke2fs -q -t ext4 -L wdmch-boot "$BOOT_DEV" || { echo "ERROR: mke2fs on $BOOT_DEV failed (busybox mke2fs may lack ext4; falling back to ext2)" >&2; mke2fs -q -L wdmch-boot "$BOOT_DEV" || exit 1; }
+mke2fs -q -t ext4 -L wdmch-root "$ROOT_DEV" || mke2fs -q -L wdmch-root "$ROOT_DEV" || { echo "ERROR: mke2fs on $ROOT_DEV failed" >&2; exit 1; }
+
+# --- mount ------------------------------------------------------------------------
+mkdir -p /mnt/target /mnt/bootfs
+mount "$ROOT_DEV" /mnt/target || { echo "ERROR: cannot mount $ROOT_DEV" >&2; exit 1; }
+mkdir -p /mnt/target/boot
+mount "$BOOT_DEV" /mnt/target/boot || { echo "ERROR: cannot mount $BOOT_DEV" >&2; exit 1; }
+
+# --- apk static: install the base system from the USB stick ------------------------
+echo "[install] installing Alpine base system from $APKS_DIR (offline)..."
+APK=/sbin/apk.static
+[ -x "$APK" ] || APK=/usr/sbin/apk.static
+[ -x "$APK" ] || { echo "ERROR: apk.static not found in initramfs" >&2; exit 1; }
+
+# keys shipped in the initramfs (/etc/apk/keys from alpine-keys)
+KEYS_DIR=/etc/apk/keys
+[ -d "$KEYS_DIR" ] || { echo "ERROR: $KEYS_DIR missing" >&2; exit 1; }
+
+"$APK" add \
+    --root /mnt/target \
+    --initdb \
+    --repository "file://$APKS_DIR/main" \
+    --repository "file://$APKS_DIR/community" \
+    --keys-dir "$KEYS_DIR" \
+    --no-cache \
+    --no-scripts \
+    alpine-base linux-firmware-none 2>&1 || {
+    # linux-firmware-none may not exist in 3.21; retry without it
+    "$APK" add \
+        --root /mnt/target \
+        --initdb \
+        --repository "file://$APKS_DIR/main" \
+        --repository "file://$APKS_DIR/community" \
+        --keys-dir "$KEYS_DIR" \
+        --no-cache \
+        --no-scripts \
+        alpine-base || { echo "ERROR: apk add failed" >&2; exit 1; }
+}
+
+# --- kernel + DTB: копируем с флешки на диск ------------------------------
+echo "[install] copying rescue kernel + DTB + initramfs to the boot partition on disk..."
+BOOT=/mnt/target/boot
+
+mkdir -p "$BOOT"
+
+# ядро (патченое, RAW)
+if [ -f /media/usb/sata.uImage ]; then
+    cp /media/usb/sata.uImage "$BOOT/Image"
+    echo "  sata.uImage -> $BOOT/Image ($(stat -c%s /media/usb/sata.uImage) bytes)"
+else
+    echo "  WARN: /media/usb/sata.uImage not found - kernel not installed on disk"
+fi
+
+# DTB
+if [ -f /media/usb/rescue.sata.dtb ]; then
+    cp /media/usb/rescue.sata.dtb "$BOOT/rtd1295-wd-mycloud-home.dtb"
+    echo "  rescue.sata.dtb -> $BOOT/rtd1295-wd-mycloud-home.dtb"
+else
+    echo "  WARN: rescue.sata.dtb not found"
+fi
+
+# initramfs (тот же, что на флешке — для kexec)
+if [ -f /media/usb/rescue.root.sata.cpio.gz_pad.img ]; then
+    cp /media/usb/rescue.root.sata.cpio.gz_pad.img "$BOOT/initramfs.cpio.gz"
+    echo "  rescue.root.sata.cpio.gz_pad.img -> $BOOT/initramfs.cpio.gz"
+else
+    echo "  WARN: initramfs not found on USB"
+fi
+
+# --- kexec 初次 загрузки: конфигурация для kexec ------------------------------
+cat > "$BOOT/kexec-boot.sh" <<'KEXEC_EOF'
+#!/bin/sh
+# kexec-boot.sh — загрузка с диска через kexec (без USB флешки)
+#
+# Использование (после установки, из rescue-оболочки на флешке):
+#   mount /dev/sda2 /mnt
+#   /mnt/boot/kexec-boot.sh
+#
+# Или просто выполнить эти команды:
+#   kexec -l /boot/Image --dtb /boot/rtd1295-wd-mycloud-home.dtb \
+#         --ramdisk /boot/initramfs.cpio.gz \
+#         --command-line="root=/dev/sda2 ro console=ttyS0,115200"
+#   kexec -e
+
+BOOT=/boot
+KERNEL="$BOOT/Image"
+DTB="$BOOT/rtd1295-wd-mycloud-home.dtb"
+INITRD="$BOOT/initramfs.cpio.gz"
+
+[ -f "$KERNEL" ] || { echo "ERROR: $KERNEL not found"; exit 1; }
+[ -f "$DTB" ] || { echo "ERROR: $DTB not found"; exit 1; }
+[ -f "$INITRD" ] || { echo "ERROR: $INITRD not found"; exit 1; }
+
+echo "Загрузка ядра $KERNEL с диска через kexec..."
+kexec -l "$KERNEL" \
+    --dtb "$DTB" \
+    --ramdisk "$INITRD" \
+    --command-line="root=/dev/sda2 ro console=ttyS0,115200 earlyprintk"
+
+if [ $? -eq 0 ]; then
+    echo "kexec подготовлен. Выполните 'kexec -e' для перезагрузки в установленную систему."
+    echo "После этого USB флешка больше не потребуется."
+else
+    echo "ERROR: kexec -l не удался"
+    exit 1
+fi
+KEXEC_EOF
+chmod +x "$BOOT/kexec-boot.sh"
+
+# --- kexec читаемый README ------------------------------
+cat > "$BOOT/README.kexec" <<'KEXEC_README'
+Как загрузить систему с диска БЕЗ USB флешки (через kexec)
+=============================================================
+
+Внимание: WD My Cloud Home не может грузиться прямо с внутреннего
+SATA диска — vendor U-Boot читает boot-файлы только с FAT USB.
+
+Поэтому для первой загрузки нужна USB флешка. Но после установки
+Alpine на диск можно сделать kexec — загрузить ядро с диска без
+перезагрузки через vendor bootloader.
+
+ШАГ 1: Первая загрузка с USB флешки
+  - Вставьте флешку, зажмите reset, включите питание
+  - Система загрузится с флешки, получит IP по DHCP
+  - ssh root@<IP>
+
+ШАГ 2: Подготовка к kexec (на первой загрузке с флешки)
+  После загрузки с флешки, ядро и DTB уже скопированы на диск
+  в /boot (это делает install-alpine). Проверьте:
+    ls -la /boot/
+  Должны быть: Image, rtd1295-wd-mycloud-home.dtb, initramfs.cpio.gz
+
+ШАГ 3: kexec на диск
+  Вариант А — ручной:
+    mount /dev/sda2 /mnt
+    kexec -l /boot/Image --dtb /boot/rtd1295-wd-mycloud-home.dtb \
+          --ramdisk /boot/initramfs.cpio.gz \
+          --command-line="root=/dev/sda2 ro console=ttyS0,115200"
+    kexec -e
+
+  Вариант Б — скрипт (если скопирован на диск):
+    mount /dev/sda2 /mnt
+    /mnt/boot/kexec-boot.sh
+
+  Вариант В — автоматически при загрузке (добавить в init):
+    echo '/mnt/boot/kexec-boot.sh' >> /etc/local.d/kexec.start
+    chmod +x /etc/local.d/kexec.start
+
+После kexec -e система перезагрузится в установленную Alpine на
+диске. USB флешка больше не потребуется для загрузки.
+
+NB: Если после kexec система не грузится — загрузитесь с флешки
+и проверьте /boot/ на диске.
+KEXEC_README
+
+# --- installed-system configuration --------------------------------------------------
+echo "[install] writing system configuration..."
+# fstab
+cat > /mnt/target/etc/fstab <<EOF
+# WDMCH Alpine install
+$ROOT_DEV  /      ext4  defaults,noatime  0 1
+$BOOT_DEV  /boot  ext4  defaults,noatime  0 2
+tmpfs      /tmp   tmpfs defaults          0 0
+EOF
+
+# network: DHCP on eth0
+mkdir -p /mnt/target/etc/network
+cat > /mnt/target/etc/network/interfaces <<'EOF'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+EOF
+
+# hostname
+echo "wdmch" > /mnt/target/etc/hostname
+
+# serial console on ttyS0
+cat > /mnt/target/etc/inittab <<'EOF'
+# /etc/inittab
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown
+EOF
+
+# dropbear for SSH (same authorized key as the rescue image)
+mkdir -p /mnt/target/etc/runlevels/default
+for svc in networking dropbear crond syslog; do
+    ln -sf /etc/init.d/$svc /mnt/target/etc/runlevels/default/$svc 2>/dev/null || true
+done
+if [ -f /root/.ssh/authorized_keys ]; then
+    mkdir -p /mnt/target/root/.ssh
+    cp /root/.ssh/authorized_keys /mnt/target/root/.ssh/authorized_keys
+    chmod 700 /mnt/target/root/.ssh
+    chmod 600 /mnt/target/root/.ssh/authorized_keys
+fi
+
+# rc.conf: use DHCP client on eth0 (via networking service + udhcpc)
+cat > /mnt/target/etc/rc.conf <<'EOF'
+rc_parallel="NO"
+rc_verbose="NO"
+EOF
+
+# enable serial console + DHCP in the installed system
+cat > /mnt/target/etc/conf.d/network <<'EOF'
+# eth0 configured via /etc/network/interfaces (DHCP)
+EOF
+
+# --- kexec-tools: ставим для удобства -------------------
+echo "[install] installing kexec-tools on target system..."
+"$APK" add \
+    --root /mnt/target \
+    --repository "file://$APKS_DIR/community" \
+    --keys-dir "$KEYS_DIR" \
+    --no-cache \
+    kexec-tools 2>/dev/null || echo "  WARN: kexec-tools not installed (may not be in repo)"
+
+# --- сбрасываем кэш apk ---------------------
+rm -rf /mnt/target/var/cache/apk/* 2>/dev/null || true
+
+# --- смотрим, что установилось ---------------------
+echo ""
+echo "Установленные пакеты на диске:"
+"$APK" list --root /mnt/target 2>/dev/null | head -20 || true
+
+# --- done ----------------------------------------------------------------------------
+echo ""
+echo "syncing and unmounting..."
+sync
+umount /mnt/target/boot 2>/dev/null
+umount /mnt/target 2>/dev/null
+
+echo ""
+echo "========================================================"
+echo " Alpine Linux installed to $DISK"
+echo "   $BOOT_DEV -> /boot  (kernel + DTB + initramfs)"
+echo "   $ROOT_DEV -> /      (Alpine base)"
+echo "========================================================"
+echo ""
+echo "Загрузка с диска:"
+echo "  1. Первая загрузка: вставьте USB флешку, зажмите reset, включите"
+echo "  2. После загрузки с флешки: ssh root@<IP>"
+echo "  3. Для загрузки без флешки (kexec): см. /boot/README.kexec"
+echo "     - или выполните: mount /dev/sda2 /mnt && /mnt/boot/kexec-boot.sh"
+echo "     - или: kexec -l /boot/Image --dtb /boot/rtd1295-wd-mycloud-home.dtb \\"
+echo "              --ramdisk /boot/initramfs.cpio.gz \\"
+echo "              --command-line='root=/dev/sda2 ro console=ttyS0,115200'"
+echo "              && kexec -e"
+echo ""
+echo "После kexec флешка больше не понадобится."
+echo "========================================================"

@@ -25,8 +25,8 @@ def parse_fdt(path):
 
     ok = True
 
-    # Check magic
-    magic = struct.unpack_from('<I', data, 0)[0]
+    # Check magic (FDT magic is stored big-endian)
+    magic = struct.unpack_from('>I', data, 0)[0]
     if magic == FDT_MAGIC:
         print(f"  FDT magic: OK (0x{magic:08X})")
     else:
