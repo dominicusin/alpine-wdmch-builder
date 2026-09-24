@@ -41,7 +41,10 @@ jobs:
               'CONFIG_PHY_RTK_RTD_SATAPHY',
               'CONFIG_USB_STORAGE',
               'CONFIG_INET',
-              'CONFIG_CMDLINE',
+              'CONFIG_BINFMT_SCRIPT',
+              'CONFIG_PACKET',
+              'CONFIG_BLK_DEV_INITRD',
+              'CONFIG_SERIAL_8250_CONSOLE',
           ]
           missing = [k for k in required if k not in cfg]
           assert not missing, f'Missing kernel config: {missing}'
