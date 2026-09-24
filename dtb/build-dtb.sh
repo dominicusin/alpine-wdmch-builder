@@ -33,15 +33,10 @@ echo "Using DTS: $DTS_PATH"
 # DTB is built by kernel/build-kernel.sh (make Image dtbs)
 # or compiled from the DTS if not found
 echo "Looking for DTB in build output..."
-BUILT_DTB=""
-# Search for the built DTB
-for candidate in \
-    "$BUILD_DIR/arch/arm64/boot/dts/realtek/rtd1295-wd-mycloud-home.dtb" ; do
-    if [ -f "$candidate" ]; then
-        BUILT_DTB="$candidate"
-        break
-    fi
-done
+BUILT_DTB="$BUILD_DIR/arch/arm64/boot/dts/realtek/rtd1295-wd-mycloud-home.dtb"
+if [ ! -f "$BUILT_DTB" ]; then
+    BUILT_DTB=""
+fi
 
 if [ -z "$BUILT_DTB" ]; then
     echo "DTB not found in build output, compiling from DTS..."
