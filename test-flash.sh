@@ -67,6 +67,10 @@ comm_count=$(find apks/community -name '*.apk' | wc -l)
 echo "      Пакетов main: $main_count"
 echo "      Пакетов community: $comm_count"
 echo "      Всего APK-файлов: $((main_count + comm_count))"
+if [ "$((main_count + comm_count))" -lt 20 ]; then
+    echo "      FAIL: слишком мало APK-пакетов ($((main_count + comm_count)) < 20) — offline-репозиторий неполный"
+    exit 1
+fi
 
 # 6. Checksums
 echo ""

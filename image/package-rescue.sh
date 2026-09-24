@@ -177,7 +177,9 @@ echo "=== Downloading Alpine packages (via dl-packages.sh) ==="
 if bash image/dl-packages.sh; then
     echo "Package download complete"
 else
-    echo "WARNING: package download had errors, continuing with what we have"
+    echo "ERROR: package download failed — log follows:" >&2
+    cat build/dl-packages.log >&2 || true
+    exit 1
 fi
 
 # Ensure APKINDEX files are in apks/ (dl-packages.sh already copies them)

@@ -30,7 +30,9 @@ for arg in "$@"; do
     esac
 done
 
-cd /home/dominicusin/src/alpine-wdmch-builder
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJ_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJ_DIR"
 # shellcheck disable=SC1091
 source config/alpine.env
 
@@ -87,12 +89,14 @@ log "DRY_RUN=$DRY_RUN"
 log ""
 
 if [ ! -f "$MAIN_INDEX" ]; then
-    log "ERROR: $MAIN_INDEX not found. Run resolve-deps.py first."
-    exit 1
+    log "APKINDEX (main) not cached — downloading..."
+    mkdir -p "$(dirname "$MAIN_INDEX")"
+    curl -fsSL "$MAIN_URL/APKINDEX.tar.gz" -o "$MAIN_INDEX" || { log "ERROR: cannot download main APKINDEX"; exit 1; }
 fi
 if [ ! -f "$COMM_INDEX" ]; then
-    log "ERROR: $COMM_INDEX not found. Run resolve-deps.py first."
-    exit 1
+    log "APKINDEX (community) not cached — downloading..."
+    mkdir -p "$(dirname "$COMM_INDEX")"
+    curl -fsSL "$COMMUNITY_URL/APKINDEX.tar.gz" -o "$COMM_INDEX" || { log "ERROR: cannot download community APKINDEX"; exit 1; }
 fi
 
 OK=0
