@@ -55,7 +55,14 @@ if [ "$needs_config" -eq 1 ]; then
     make -C "$KERNEL_DIR" O="$ABS_BUILD_DIR" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" defconfig
     # 2. merge the WDMCH fragment on top (merge_config.sh resolves deps)
     "$KERNEL_DIR/scripts/kconfig/merge_config.sh" -m "$BUILD_DIR/.config" config/kernel.config
-    # 3. settle dependencies into the final .config
+    # 3. Force-enable RTD1295 SATA/eth drivers — merge_config.sh sometimes
+    #    silently drops them due to Kconfiglib dependency resolution.
+    for sym in AHCI_RTD1295 R8169SOC PHY_RTK_RTD_SATAPHY; do
+        if ! grep -q "^CONFIG_${sym}=y$" "$BUILD_DIR/.config" 2>/dev/null; then
+            sed -i "/^# CONFIG_${sym} is not set/c\\CONFIG_${sym}=y" "$BUILD_DIR/.config"
+        fi
+    done
+    # 4. settle dependencies into the final .config
     make -C "$KERNEL_DIR" O="$ABS_BUILD_DIR" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" olddefconfig
     echo "$CONFIG_MD5" > "$CONFIG_STAMP"
 else

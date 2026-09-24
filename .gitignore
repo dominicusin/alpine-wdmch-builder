@@ -45,3 +45,4 @@ security/
 sound/
 staging/
 usr/
+*.config.* 
