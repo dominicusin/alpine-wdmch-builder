@@ -34,24 +34,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cache kernel build
+      - name: Cache kernel source + Alpine APK cache
         uses: actions/cache@v4
         with:
           path: |
-            .work/monarch-6.18/arch/arm64/boot/Image
-            .work/monarch-6.18/arch/arm64/boot/.config
-            .work/monarch-6.18/scripts/dtc/*.dtb
-          key: kernel-${{ hashFiles('.work/monarch-6.18/arch/arm64/configs/*.config') }}
+            .work/monarch-6.18
+            .work/apk-cache
+            .work/apk-cache-offline
+          key: source-${{ env.ALPINE_VERSION }}-${{ env.ALPINE_ARCH }}-${{ hashFiles('config/kernel.config', 'config/source-lock.env', 'rootfs/build-rootfs.sh') }}
           restore-keys: |
-            kernel-
+            source-${{ env.ALPINE_VERSION }}-${{ env.ALPINE_ARCH }}-
 
-      - name: Cache Alpine APKINDEX
+      - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: .work/apk-cache-offline
-          key: apkindex-${{ env.ALPINE_VERSION }}-${{ env.ALPINE_ARCH }}
-          restore-keys: |
-            apkindex-${{ env.ALPINE_VERSION }}-
+          path: build/.ccache
+          key: ccache-${{ hashFiles('config/kernel.config') }}
 
       - name: Install build dependencies
         run: |
@@ -77,6 +75,9 @@ jobs:
           echo "CCACHE_COMPILERCHECK=content" >> build/ccache.env
           ccache --max-size=2G
           ccache --show-stats || true
+
+      - name: Fetch kernel source
+        run: bash kernel/fetch-kernel.sh
 
       - name: Build kernel (Image + DTB)
         run: |
@@ -116,6 +117,8 @@ jobs:
           cat build/kernel/kernel-release.txt
 
       - name: Build rescue initramfs
+        env:
+          WDMCH_SSH_AUTHORIZED_KEY: ${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}
         run: |
           bash rootfs/build-rootfs.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
           SIZE=$(stat -c%s build/kernel/rescue.root.sata.cpio.gz_pad.img)
@@ -137,8 +140,6 @@ jobs:
           rm -f /tmp/busybox-extracted
 
       - name: Package rescue artifacts + flash.zip
-        env:
-          WDMCH_SSH_AUTHORIZED_KEY: ${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}
         run: |
           bash image/package-rescue.sh
           echo ""
