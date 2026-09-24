@@ -23,6 +23,7 @@ echo "=== Building Alpine rescue initramfs ==="
 
 # Load Alpine pin (version/arch)
 set -a
+# shellcheck disable=SC1091
 source config/alpine.env
 set +a
 

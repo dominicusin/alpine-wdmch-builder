@@ -31,6 +31,7 @@ for arg in "$@"; do
 done
 
 cd /home/dominicusin/src/alpine-wdmch-builder
+# shellcheck disable=SC1091
 source config/alpine.env
 
 MAIN_URL="${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}/v${ALPINE_VERSION}/main/${ALPINE_ARCH}"

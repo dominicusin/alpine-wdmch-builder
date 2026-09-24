@@ -73,6 +73,7 @@ run_build() {
     # Load optional build env
     if [ -f config/build.env ]; then
         set -a
+        # shellcheck disable=SC1091
         source config/build.env
         set +a
     fi

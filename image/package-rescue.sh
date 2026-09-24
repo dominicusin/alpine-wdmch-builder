@@ -168,6 +168,7 @@ echo "README.txt written"
 
 # ---- 7. Alpine packages (use dl-packages.sh) ----------------------------------------
 set -a
+# shellcheck disable=SC1091
 source config/alpine.env
 set +a
 

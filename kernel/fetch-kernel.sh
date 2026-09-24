@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 # Load source locks
 set -a
+# shellcheck disable=SC1091
 source config/source-lock.env
 set +a
 
