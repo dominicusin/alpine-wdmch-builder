@@ -17,6 +17,7 @@ set -Eeuo pipefail
 #   authentication is disabled (dropbear -s). No private key material ships.
 
 ROOT="${1:-build/rootfs}"
+# shellcheck disable=SC2034
 RELEASE="${2:-$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none)}"
 
 echo "=== Building Alpine rescue initramfs ==="
@@ -39,12 +40,12 @@ if [ -f config/build.env ]; then
 fi
 if [ -n "${WDMCH_SSH_AUTHORIZED_KEY:-}" ]; then
     AUTH_KEY="$WDMCH_SSH_AUTHORIZED_KEY"
-elif [ -f "$HOME/.ssh/id_ed25519.pub" ]; then
-    AUTH_KEY="$(head -1 "$HOME/.ssh/id_ed25519.pub")"
-    echo "NOTE: WDMCH_SSH_AUTHORIZED_KEY not set; using $HOME/.ssh/id_ed25519.pub"
-elif [ -f "$HOME/.ssh/id_rsa.pub" ]; then
-    AUTH_KEY="$(head -1 "$HOME/.ssh/id_rsa.pub")"
-    echo "NOTE: WDMCH_SSH_AUTHORIZED_KEY not set; using $HOME/.ssh/id_rsa.pub"
+elif [ -n "${HOME:-}" ] && [ -f "${HOME}/.ssh/id_ed25519.pub" ]; then
+    AUTH_KEY="$(head -1 "${HOME}/.ssh/id_ed25519.pub")"
+    echo "NOTE: WDMCH_SSH_AUTHORIZED_KEY not set; using ${HOME}/.ssh/id_ed25519.pub"
+elif [ -n "${HOME:-}" ] && [ -f "${HOME}/.ssh/id_rsa.pub" ]; then
+    AUTH_KEY="$(head -1 "${HOME}/.ssh/id_rsa.pub")"
+    echo "NOTE: WDMCH_SSH_AUTHORIZED_KEY not set; using ${HOME}/.ssh/id_rsa.pub"
 fi
 if [ -z "$AUTH_KEY" ]; then
     echo "ERROR: no SSH public key found (config/build.env WDMCH_SSH_AUTHORIZED_KEY or ~/.ssh/*.pub)" >&2

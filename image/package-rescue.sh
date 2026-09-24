@@ -192,7 +192,7 @@ echo ""
 echo "=== USB tree ready: $USB_TREE ==="
 echo ""
 echo "Files at USB stick root (copy these to FAT32 stick):"
-find "$USB_TREE" -maxdepth 2 -type f | sort | while read f; do echo "  $f ($(du -h "$f" | cut -f1))"; done
+find "$USB_TREE" -maxdepth 2 -type f | sort | while read -r f; do echo "  $f ($(du -h "$f" | cut -f1))"; done
 echo ""
 echo "To copy to USB stick:"
 echo "  mount /dev/sdX1 /mnt && cp -r $USB_TREE/* /mnt/ && sync"
