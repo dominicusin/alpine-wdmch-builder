@@ -85,15 +85,15 @@ jobs:
             --exclude='.git' \
             --exclude='*.pyc' \
             build/release/
-          # Create release zip of USB flash contents
-          cd build/release
-          zip -j "../../alpine-wdmch-rescue-${VERSION}-flash.zip" \
-            sata.uImage \
-            rescue.sata.dtb \
-            rescue.root.sata.cpio.gz_pad.img \
-            SHA256SUMS \
-            manifest.json
-          cd ../..
+          # Use the FULL flash.zip from build artifacts (includes all APKs)
+          cp release-artifacts/flash.zip "alpine-wdmch-rescue-${VERSION}-flash.zip"
+          ls -lh "alpine-wdmch-rescue-${VERSION}-flash.zip"
+
+      - name: Copy release artifacts for GitHub Release
+        run: |
+          VERSION=$(cat VERSION)
+          cp build/release/SHA256SUMS .
+          cp build/release/manifest.json .
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
