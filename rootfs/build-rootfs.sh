@@ -169,6 +169,15 @@ mkdir -p "$ROOT/proc" "$ROOT/sys" "$ROOT/dev" "$ROOT/tmp" "$ROOT/run" \
          "$ROOT/mnt" "$ROOT/media" "$ROOT/var/log" "$ROOT/etc/network" \
          "$ROOT/newroot"
 
+# /etc/network/interfaces — minimal DHCP config for rescue networking
+cat > "$ROOT/etc/network/interfaces" <<'EOF'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+EOF
+
 # ---- build the padded cpio (FIXED: write to ABSOLUTE path) -----------------
 OUT="build/kernel/rescue.root.sata.cpio.gz_pad.img"
 mkdir -p build/kernel
