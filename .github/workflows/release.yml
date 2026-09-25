@@ -102,11 +102,10 @@ jobs:
             --title "WDMCH Rescue Image v${VERSION}" \
             --repo dominicusin/alpine-wdmch-builder \
             --generate-notes \
-            --file "alpine-wdmch-rescue-${VERSION}-flash.zip" \
-            --file "SHA256SUMS" \
-            --file "manifest.json" || \
-          echo "Release already exists, updating..." && \
-          gh release edit "v${VERSION}" --add-file "alpine-wdmch-rescue-${VERSION}-flash.zip" --add-file "SHA256SUMS" --add-file "manifest.json"
+            --force \
+            "alpine-wdmch-rescue-${VERSION}-flash.zip" \
+            "SHA256SUMS" \
+            "manifest.json"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
