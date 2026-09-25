@@ -96,31 +96,19 @@ jobs:
           cp build/release/manifest.json .
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            alpine-wdmch-rescue-*-flash.zip
-            SHA256SUMS
-            manifest.json
-          body: |
-            # WDMCH Alpine Rescue Image v${VERSION}
-            ## Device
-            - WD My Cloud Home (single-bay)
-            - Realtek RTD1295
-            - ARM64 / aarch64
-            ## Artifacts
-            See [docs/usb-rescue.md](docs/usb-rescue.md) for USB boot instructions.
-            ## Security
-            - Root SSH uses public-key authentication only
-
-      - name: Upload release assets
-        uses: actions/upload-release-asset@v1
+        run: |
+          VERSION=$(cat VERSION)
+          gh release create "v${VERSION}" \
+            --title "WDMCH Rescue Image v${VERSION}" \
+            --repo dominicusin/alpine-wdmch-builder \
+            --generate-notes \
+            --file "alpine-wdmch-rescue-${VERSION}-flash.zip" \
+            --file "SHA256SUMS" \
+            --file "manifest.json" || \
+          echo "Release already exists, updating..." && \
+          gh release edit "v${VERSION}" --add-file "alpine-wdmch-rescue-${VERSION}-flash.zip" --add-file "SHA256SUMS" --add-file "manifest.json"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          asset_path: alpine-wdmch-rescue-${{ github.ref_name }}-flash.zip
-          asset_name: alpine-wdmch-rescue-${{ github.ref_name }}-flash.zip
-          asset_content_type: application/zip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-dry-run:
     runs-on: ubuntu-24.04
