@@ -35,8 +35,8 @@ if grep -q 'permissions:' .github/workflows/*.yml; then
     echo "  Permissions defined: OK"
 fi
 
-# Check build.yml invokes build script from repo root
-if grep -q './build-image.sh' .github/workflows/build.yml; then
+# Check build-image.sh invoked in release.yml (not build.yml)
+if grep -q './build-image.sh' .github/workflows/release.yml; then
     echo "  build-image.sh invoked from repo root: OK"
 fi
 
