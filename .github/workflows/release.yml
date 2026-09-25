@@ -62,6 +62,8 @@ jobs:
           echo "SSH authorized key configured"
 
       - name: Build complete image
+        env:
+          WDMCH_SSH_AUTHORIZED_KEY: ${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}
         run: |
           export CC="ccache aarch64-linux-gnu-gcc"
           export CROSS_TARGET="aarch64-linux-gnu"
@@ -163,6 +165,8 @@ jobs:
           ccache --show-stats
 
       - name: Dry run release build
+        env:
+          WDMCH_SSH_AUTHORIZED_KEY: ${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}
         run: |
           export CC="ccache aarch64-linux-gnu-gcc"
           export CROSS_TARGET="aarch64-linux-gnu"
