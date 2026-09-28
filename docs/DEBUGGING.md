@@ -72,17 +72,39 @@ text_offset = 0x200000     (offset 8)
 pe_offset   = 0x40         (offset 60)
 ```
 
-Verify on a host:
+Verify on a host. The repo ships the real check, so prefer it:
+
+```bash
+python3 tools/check-image-header.py build/release/sata.uImage
+```
+
+Against a bare stick (no repo checkout) this standalone version prints each
+field and states whether it matches, instead of only showing the numbers:
 
 ```bash
 python3 - <<'EOF'
-import struct
-d = open('sata.uImage','rb').read(64)
-print('code0       = 0x%08X' % struct.unpack_from('<I', d, 0)[0])
-print('text_offset = 0x%08X' % struct.unpack_from('<Q', d, 8)[0])
-print('pe_offset   = 0x%08X' % struct.unpack_from('<Q', d, 60)[0])
+import struct, sys
+d = open('sata.uImage', 'rb').read(64)
+if len(d) < 64:
+    sys.exit("FAIL: sata.uImage is shorter than 64 bytes")
+got = {
+    'code0':       struct.unpack_from('<I', d, 0)[0],
+    'text_offset': struct.unpack_from('<Q', d, 8)[0],
+    'pe_offset':   struct.unpack_from('<I', d, 60)[0],   # u32, not u64
+}
+want = {'code0': 0x91005A4D, 'text_offset': 0x200000, 'pe_offset': 0x40}
+bad = 0
+for k in ('code0', 'text_offset', 'pe_offset'):
+    ok = got[k] == want[k]
+    bad += not ok
+    print(f"{k:<12} = 0x{got[k]:08X}   expected 0x{want[k]:08X}   {'OK' if ok else 'MISMATCH'}")
+sys.exit(1 if bad else 0)
 EOF
 ```
+
+Note the widths: `code0` and `pe_offset` are **32-bit**, only `text_offset` is
+64-bit. Reading `pe_offset` as 8 bytes at offset 60 runs off the end of the
+64-byte header and raises `struct.error` instead of printing the value.
 
 All three must match the values above. A `text_offset` of 0 means the header
 was never patched, or was patched twice from an already-patched copy.
