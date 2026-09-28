@@ -139,6 +139,34 @@ n_closure=$(echo "$CLOSURE" | wc -l)
 log "Closure resolved: $n_closure packages"
 log ""
 
+# Prune anything left over from a previous run BEFORE downloading.
+#
+# The USB tree is a persistent directory, so changing the seed set used to
+# leave the old packages sitting next to the new ones. A local build then
+# carried packages that are not in the closure - and therefore not in any CI
+# release - so the stick stopped matching the published artifact and nothing
+# reported it. CI starts from a clean checkout, which is why the releases
+# looked right while local builds silently drifted.
+log "Pruning packages not in the closure ..."
+KEEP=$(mktemp)
+trap 'rm -f "$KEEP"' EXIT
+echo "$CLOSURE" | cut -f4 | sed 's|.*/||' | sort -u > "$KEEP"
+stale=0
+for d in "$MAIN_DIR" "$COMM_DIR"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*.apk; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f")
+        grep -qxF "$b" "$KEEP" || { rm -f "$f"; stale=$((stale + 1)); }
+    done
+done
+if [ "$stale" -gt 0 ]; then
+    log "  removed $stale stale package(s) from a previous run"
+else
+    log "  nothing stale"
+fi
+log ""
+
 # TSV: repo <TAB> name <TAB> version <TAB> filename. The repo comes from the
 # resolver, so no name has to be recovered from a filename here.
 while IFS=$'\t' read -r repo pkg ver file; do

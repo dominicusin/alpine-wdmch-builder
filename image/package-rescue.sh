@@ -224,5 +224,12 @@ echo "Artifact packaging complete."
 
 # ---- 8. flash.zip at build/flash.zip (for test-flash.sh) --------------------------
 PROJ_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-( cd "$USB_TREE" && zip -r "$PROJ_DIR/build/flash.zip" . )
+# Rebuild the archive from scratch. `zip -r` against an existing flash.zip
+# only ADDS and updates entries - it never removes one, so anything deleted
+# from the stick tree (a pruned stale apk, a renamed artifact) would survive
+# in the published release indefinitely. CI starts from a clean checkout so
+# the releases looked correct while a local flash.zip silently accumulated
+# packages that were not in the closure.
+rm -f "$PROJ_DIR/build/flash.zip"
+( cd "$USB_TREE" && zip -r -q "$PROJ_DIR/build/flash.zip" . )
 echo "flash.zip created at build/flash.zip"

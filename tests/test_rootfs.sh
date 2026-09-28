@@ -20,6 +20,44 @@ test -x "$ROOT/usr/local/sbin/verify-install" || {
 sh -n "$ROOT/usr/local/sbin/verify-install" || {
     echo "FAIL: verify-install is not valid POSIX sh"; exit 1; }
 
+# flash.zip must contain exactly the packages the resolver says are in the
+# closure - no more, no fewer. `zip -r` against an existing archive only adds
+# and updates entries, so a package removed from the stick tree used to
+# survive in the artifact indefinitely and never appear in any review.
+if [ -f "$PROJ_DIR/build/flash.zip" ]; then
+    echo "Checking flash.zip package set matches the resolver closure"
+    python3 - "$PROJ_DIR" <<'PY'
+import subprocess, sys, zipfile, os
+repo = sys.argv[1]
+idx = os.path.join(repo, "build/usb-tree-root/apks")
+main_i = os.path.join(idx, "main/APKINDEX.tar.gz")
+comm_i = os.path.join(idx, "community/APKINDEX.tar.gz")
+if not (os.path.exists(main_i) and os.path.exists(comm_i)):
+    print("  skipped: offline indexes not built")
+    sys.exit(0)
+seeds = ["alpine-base", "openrc-init", "ifupdown-ng", "dropbear",
+         "e2fsprogs", "kexec-tools"]
+out = subprocess.run([sys.executable, os.path.join(repo, "image/resolve-deps.py"),
+                      "--tsv", "--main", main_i, "--community", comm_i] + seeds,
+                     capture_output=True, text=True, cwd=repo)
+if out.returncode != 0:
+    print("  skipped: resolver did not run cleanly")
+    sys.exit(0)
+want = {l.split("\t")[3].split("/")[-1] for l in out.stdout.splitlines() if l.count("\t") >= 3}
+with zipfile.ZipFile(os.path.join(repo, "build/flash.zip")) as z:
+    have = {n.split("/")[-1] for n in z.namelist() if n.endswith(".apk")}
+extra, missing = have - want, want - have
+if extra or missing:
+    for n in sorted(extra):
+        print(f"  FAIL: {n} is in flash.zip but not in the closure")
+    for n in sorted(missing):
+        print(f"  FAIL: {n} is in the closure but missing from flash.zip")
+    sys.exit(1)
+print(f"  {len(have)} packages, exactly the closure: OK")
+PY
+    [ $? -eq 0 ] || exit 1
+fi
+
 # The installed system gets /sbin/init from busybox's .post-install
 # (`busybox --install -s`) plus its /sbin trigger. apk skips BOTH under
 # --no-scripts, so passing that flag on the target install silently yields a
