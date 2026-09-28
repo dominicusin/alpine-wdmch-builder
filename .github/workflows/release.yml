@@ -118,11 +118,21 @@ jobs:
       - name: Publish GitHub Release
         run: |
           VERSION=$(cat VERSION)
-          gh release create "v${VERSION}" \
-            --title "WDMCH Rescue Image v${VERSION}" \
+          TAG="v${VERSION}"
+          # `gh release create` has no --force flag (it aborts with
+          # "unknown flag: --force"), and it refuses to overwrite an existing
+          # release. Delete the release first so a re-run is idempotent;
+          # --yes skips the prompt and the git tag is kept (--cleanup-tag is
+          # opt-in), so the pushed tag is never disturbed.
+          if gh release view "$TAG" --repo dominicusin/alpine-wdmch-builder >/dev/null 2>&1; then
+            echo "release $TAG already exists - replacing it"
+            gh release delete "$TAG" --repo dominicusin/alpine-wdmch-builder --yes
+          fi
+          gh release create "$TAG" \
+            --title "WDMCH Rescue Image ${TAG}" \
             --repo dominicusin/alpine-wdmch-builder \
+            --verify-tag \
             --generate-notes \
-            --force \
             "alpine-wdmch-rescue-${VERSION}-flash.zip" \
             "SHA256SUMS" \
             "manifest.json"
