@@ -98,6 +98,38 @@ power-on, or automatically when no factory partition is found.
    countdown** on the serial console before handing over. Press `ENTER` on the
    console during that window to keep the rescue shell instead.
 
+## After the first boot: verify the install
+
+The build cannot check the parts that only exist on real hardware — the
+`switch_root` handover, the preserved partition table, DHCP and SSH. The
+installer therefore copies a health check onto the target:
+
+```sh
+verify-install
+```
+
+Run it over SSH (or from the serial console) once the box has come up. It
+checks, and exits non-zero if any fail:
+
+- an init is present and executable, and PID 1 is an init
+- `/` really is the ext4 filesystem labelled `wdmch-root`
+- `/` is mounted read-write
+- the internal disk still exposes at least 20 partitions — i.e. the factory
+  GPT was **not** rewritten
+- `/boot/Image` is present, so `boot-full-alpine` can kexec
+- the offline install completed: `busybox`, `openrc`, `openrc-init`,
+  `dropbear`, `ifupdown-ng` and `mdev-conf` are all in the apk database
+- `eth0` has an address and dropbear is running
+
+The same script runs offline against a mounted target root, which skips the
+host-relative checks:
+
+```sh
+verify-install /mnt/target
+```
+
+If it reports `FAIL`, the specific failing line names what broke.
+
 ## SSH access
 
 ```bash

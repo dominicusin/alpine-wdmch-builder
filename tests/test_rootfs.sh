@@ -11,6 +11,14 @@ test -x "$ROOT/usr/sbin/dropbear" || { echo "FAIL: dropbear not found"; exit 1; 
 test -f "$ROOT/etc/network/interfaces" || { echo "FAIL: network/interfaces missing"; exit 1; }
 test -f "$ROOT/root/.ssh/authorized_keys" || { echo "FAIL: authorized_keys missing"; exit 1; }
 test -x "$ROOT/etc/init.d/99-disk-root" || { echo "FAIL: 99-disk-root handoff script not executable"; exit 1; }
+test -x "$ROOT/usr/local/sbin/verify-install" || {
+    echo "FAIL: verify-install not shipped in the rescue image"
+    echo "      install-alpine copies it onto the target so the operator can"
+    echo "      health-check the box after the first boot"
+    exit 1
+}
+sh -n "$ROOT/usr/local/sbin/verify-install" || {
+    echo "FAIL: verify-install is not valid POSIX sh"; exit 1; }
 
 # The installed system gets /sbin/init from busybox's .post-install
 # (`busybox --install -s`) plus its /sbin trigger. apk skips BOTH under

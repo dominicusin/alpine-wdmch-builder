@@ -198,6 +198,12 @@ mkdir -p "$ROOT/usr/local/sbin"
 cp rootfs/install-alpine "$ROOT/usr/local/sbin/install-alpine"
 chmod 755 "$ROOT/usr/local/sbin/install-alpine"
 
+# ---- verify-install: copied onto the target by install-alpine ---------------
+# The rescue image runs it from here; install-alpine copies it to the installed
+# system so the operator can health-check the box after the first boot.
+cp scripts/verify-install.sh "$ROOT/usr/local/sbin/verify-install"
+chmod 755 "$ROOT/usr/local/sbin/verify-install"
+
 # ---- standard dirs ----------------------------------------------------------
 mkdir -p "$ROOT/proc" "$ROOT/sys" "$ROOT/dev" "$ROOT/tmp" "$ROOT/run" \
          "$ROOT/mnt" "$ROOT/media" "$ROOT/var/log" "$ROOT/etc/network" \

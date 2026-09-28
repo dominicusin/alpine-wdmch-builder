@@ -507,6 +507,16 @@ root_label=$ROOT_LABEL
 installed_by=install-alpine
 EOF
 
+# Ship the post-install health check onto the target. The build cannot verify
+# the handover, the network or the partition table without real hardware, so
+# give the operator one command to run once the box has booted.
+if [ -f /usr/local/sbin/verify-install ]; then
+    mkdir -p "$MNT/usr/local/sbin"
+    cp /usr/local/sbin/verify-install "$MNT/usr/local/sbin/verify-install"
+    chmod 755 "$MNT/usr/local/sbin/verify-install"
+    log "  installed /usr/local/sbin/verify-install (run it after the first boot)"
+fi
+
 # ---------------------------------------------------------------------------
 # 9. optional kexec handoff (lets the stick be pulled after first boot)
 # ---------------------------------------------------------------------------
