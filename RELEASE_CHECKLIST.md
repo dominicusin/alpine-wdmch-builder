@@ -15,17 +15,26 @@
 - [ ] `rtd1295-wd-mycloud-home.dtb` is generated and validated
 - [ ] Image header has `code0=0x91005A4D`, `text_offset=0x200000`, `pe_offset=0x40`
 - [ ] Required capabilities are enabled (SATA, Ethernet, USB, DT, kexec)
-- [ ] Kernel modules match the built kernel release
+- [ ] Every WDMCH-critical driver is `=y`, not `=m` — this image ships **zero
+      kernel modules**, so anything built modular is unavailable before `/init`
+      runs. Asserted by `tests/test_rootfs.sh` against `config/kernel.config`.
 
 ### Rootfs Validation
 
 - [ ] Alpine aarch64 minirootfs is checksum-verified
-- [ ] `/lib/modules/<kernel-release>` is present and matches
 - [ ] `/init` is executable and runs as PID 1
+- [ ] `etc/init.d/99-disk-root` is executable (the `switch_root` handoff)
 - [ ] DHCP on `eth0` is configured
 - [ ] Dropbear SSH is configured with public-key only
 - [ ] No root password is set
-- [ ] `/usr/local/sbin/boot-full-alpine` exists (optional kexec)
+- [ ] The target `apk add` runs package scripts — `--no-scripts` skips
+      busybox's `.post-install`, so `/sbin/init` would never be created and the
+      installed system could not boot. Asserted by `tests/test_rootfs.sh`.
+
+> `boot-full-alpine` is **not** a build artifact. It is written onto the target
+> filesystem by `install-alpine` at install time, so there is nothing to check
+> in `build/`; the requirement is that the installer creates it, not that it
+> ships.
 
 ### Artifact Validation
 
@@ -59,13 +68,22 @@
 
 - [ ] **DO NOT** boot GOLD partition — documented
 - [ ] **DO NOT** write A/B/GOLD slots — documented
-- [ ] Back up existing WDMCH firmware table before any flashing
+- [ ] The factory 24-partition GPT is preserved — only `p20 SYSTEM_B` is
+      written. Creating `sda1`/`sda2` is not a valid layout: the vendor
+      initramfs probes `sda9`, `sda18` and `sda19..sda24`, so a rootfs outside
+      that range is unreachable and the unit will not boot.
+- [ ] `p1 FW_TABLE` is backed up before any write, and is never overwritten
+- [ ] The installer refuses to run against the USB stick, which can claim
+      `/dev/sda` — formatting it would destroy the boot medium
 - [ ] No build step writes to NAS block devices
 - [ ] USB rescue creation is read-only with respect to NAS
 
 ### Final Steps
 
 - [ ] Run `./tools/release-audit.sh` — all checks pass
+- [ ] `VERSION` matches the tag being pushed — `release.yml` derives the
+      release name from the `VERSION` **file**, not from the triggering tag,
+      so a mismatch publishes new artifacts under the old tag
 - [ ] Tag with version: `v<version>`
 - [ ] GitHub Release publishes correct artifacts
 - [ ] `SHA256SUMS` and `manifest.json` are published
@@ -74,5 +92,8 @@
 ## Post-Release
 
 - [ ] Verify artifacts on non-production WDMCH hardware
+- [ ] Confirm `/sbin/init` exists on the installed system — this is the one
+      change that cannot be verified without the real target, because
+      `apk.static` cannot open a repository directory under `qemu-aarch64`
 - [ ] Document any observed serial output for future reference
 - [ ] Update version in `VERSION` file for next release
