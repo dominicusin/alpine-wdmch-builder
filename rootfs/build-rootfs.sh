@@ -141,7 +141,7 @@ if [ -n "$missing" ]; then
     echo "       This busybox build cannot support the rescue image." >&2
     exit 1
 fi
-echo "applet symlinks OK ($(ls "$ROOT/bin" | wc -l) entries, all required present)"
+echo "applet symlinks OK ($(find "$ROOT/bin" -maxdepth 1 -type l | wc -l) entries, all required present)"
 
 # udhcpc needs its hook script
 mkdir -p "$ROOT/usr/share/udhcpc"
