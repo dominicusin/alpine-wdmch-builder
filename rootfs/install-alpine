@@ -369,16 +369,37 @@ echo ""
 echo "[install] verifying the installed system ..."
 verify_failed=0
 have_init=""
+init_note=""
 for i in sbin/init init usr/sbin/init lib/systemd/systemd usr/lib/systemd/systemd; do
     if [ -x "$MNT/$i" ]; then have_init="$i"; break; fi
 done
 if [ -z "$have_init" ]; then
+    # Self-heal rather than leave a brick. Alpine's /sbin/init is normally a
+    # symlink to busybox created by busybox's .post-install
+    # (`busybox --install -s`). We deliberately run package scripts, but do
+    # NOT rely on that alone: recreate the link explicitly so an install can
+    # never end up with a rootfs that cannot boot.
+    bb=""
+    for b in bin/busybox sbin/busybox usr/bin/busybox usr/sbin/busybox; do
+        [ -x "$MNT/$b" ] && { bb="$b"; break; }
+    done
+    if [ -n "$bb" ]; then
+        mkdir -p "$MNT/sbin"
+        ln -sf "/$bb" "$MNT/sbin/init"
+        if [ -x "$MNT/sbin/init" ]; then
+            have_init="sbin/init"
+            init_note="(created -> /$bb; busybox provides the init applet)"
+        fi
+    fi
+fi
+if [ -z "$have_init" ]; then
     echo "  FAIL: no init binary in the installed system"
     echo "        looked for sbin/init, init, usr/sbin/init, lib/systemd/systemd"
+    echo "        and found no busybox to symlink it to"
     echo "        the offline repo is probably missing openrc-init - rebuild flash.zip"
     verify_failed=1
 else
-    echo "  init:      /$have_init"
+    echo "  init:      /$have_init $init_note"
 fi
 if [ -x "$MNT/sbin/ifup" ] || [ -x "$MNT/usr/sbin/ifup" ]; then
     echo "  ifupdown:  present"
