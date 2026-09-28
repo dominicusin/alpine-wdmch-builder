@@ -78,6 +78,21 @@ jobs:
           echo "$ref" | grep -Eq '^[0-9a-f]{7,40}$' || {
             echo "FAIL: KERNEL_REF is not a commit SHA" >&2; exit 1; }
 
+      - name: Reject any workflow that rewrites the kernel pin
+        run: |
+          # A workflow that redirects a KERNEL_REF assignment into
+          # config/source-lock.env silently replaces the kernel pin with the
+          # builder repo's own HEAD. fetch-kernel.sh then asks the kernel
+          # remote for a commit it does not have: "upload-pack: not our ref".
+          # The pin must come from the committed file and nowhere else.
+          # (Reading the value back and echoing it is fine; only a write is not.)
+          if grep -rnE 'KERNEL_REF=.*>>?[[:space:]]*(config/)?source-lock\.env' \
+               .github/ scripts/ Makefile 2>/dev/null; then
+            echo "FAIL: a workflow or script writes KERNEL_REF into the lock file; the pin is committed in config/source-lock.env" >&2
+            exit 1
+          fi
+          echo "kernel pin is only read, never written: OK"
+
       - name: Reject the old /boot/ USB layout
         run: |
           # The vendor loader reads fixed filenames from the ROOT of the FAT

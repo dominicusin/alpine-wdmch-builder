@@ -39,9 +39,14 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Configure kernel reference and ccache
+      - name: Configure ccache
         run: |
-          echo "KERNEL_REF=$(git rev-parse HEAD)" >> config/source-lock.env
+          # NOTE: do NOT set KERNEL_REF here. The pin is committed in
+          # config/source-lock.env and CI must build exactly that. Appending
+          # "KERNEL_REF=$(git rev-parse HEAD)" would put the *builder repo's*
+          # commit into the lock file, overriding the kernel pin - the fetch
+          # then asks the kernel remote for a commit it does not have and
+          # fails with "upload-pack: not our ref".
           mkdir -p build/.ccache
           echo "CCACHE_DIR=build/.ccache" >> config/build.env
           echo "CCACHE_COMPILERCHECK=content" >> config/build.env
@@ -157,9 +162,14 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Configure kernel reference and ccache
+      - name: Configure ccache
         run: |
-          echo "KERNEL_REF=$(git rev-parse HEAD)" >> config/source-lock.env
+          # NOTE: do NOT set KERNEL_REF here. The pin is committed in
+          # config/source-lock.env and CI must build exactly that. Appending
+          # "KERNEL_REF=$(git rev-parse HEAD)" would put the *builder repo's*
+          # commit into the lock file, overriding the kernel pin - the fetch
+          # then asks the kernel remote for a commit it does not have and
+          # fails with "upload-pack: not our ref".
           mkdir -p build/.ccache
           echo "CCACHE_DIR=build/.ccache" >> config/build.env
           echo "CCACHE_COMPILERCHECK=content" >> config/build.env
