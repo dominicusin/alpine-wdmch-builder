@@ -92,8 +92,11 @@
 ## Post-Release
 
 - [ ] Verify artifacts on non-production WDMCH hardware
-- [ ] Confirm `/sbin/init` exists on the installed system — this is the one
-      change that cannot be verified without the real target, because
-      `apk.static` cannot open a repository directory under `qemu-aarch64`
+- [ ] ~~Confirm `/sbin/init` exists on the installed system~~ — no longer a hard
+      blocker. `install-alpine` recreates `/sbin/init` as a symlink to the
+      installed busybox if the package install did not create it, so an install
+      cannot end up with a rootfs that cannot boot. Covered by
+      `tests/test_install_verify.sh`; still worth confirming on first hardware
+      run that the handover actually happens.
 - [ ] Document any observed serial output for future reference
 - [ ] Update version in `VERSION` file for next release
