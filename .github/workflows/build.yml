@@ -159,69 +159,12 @@ jobs:
           echo "=== test-flash.sh ==="
           bash test-flash.sh
 
+      # This workflow only runs on branch pushes and PRs, never on a tag, so
+      # there is no tag-specific upload to do here: release.yml is the only
+      # publisher and it builds flash.zip itself from source.
       - name: Upload flash.zip artifact
         uses: actions/upload-artifact@v7
-        if: github.ref_type != 'tag'
         with:
           name: wdmch-rescue-flash
           path: build/flash.zip
           retention-days: 30
-
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@v7
-        if: github.ref_type == 'tag'
-        with:
-          name: wdmch-rescue-release
-          path: |
-            build/flash.zip
-            build/release/SHA256SUMS
-            build/release/manifest.json
-          retention-days: 90
-
-  release:
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v7
-        with:
-          name: wdmch-rescue-release
-          path: release-artifacts
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            release-artifacts/flash.zip
-            release-artifacts/SHA256SUMS
-            release-artifacts/manifest.json
-          body: |
-            # WDMCH Alpine Rescue Image ${{ github.ref_name }}
-
-            ## Device
-            - WD My Cloud Home (single-bay)
-            - Realtek RTD1295, ARM64 / aarch64
-
-            ## Boot
-            - Insert FAT32 USB stick with flash.zip contents at root
-            - Hold reset button, power on, hold ~10 seconds
-            - ssh root@<device-ip> (public-key auth, no password)
-
-            ## Install Alpine Linux
-            - ssh root@<device-ip>
-            - install-alpine /dev/sda    # interactive
-            - install-alpine /dev/sda --yes   # non-interactive
-
-            ## SSH key
-            - Root login uses public-key authentication only
-            - Key must be set via WDMCH_SSH_AUTHORIZED_KEY secret
-
-            ## Security
-            - Vendor firmware (A/B/GOLD) never touched
-            - install-alpine ERASES the internal disk

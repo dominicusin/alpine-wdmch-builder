@@ -103,19 +103,45 @@ rm -rf "${ROOT:?}/usr/share" "${ROOT:?}/usr/include" "${ROOT:?}/etc/ssl" \
        "${ROOT:?}/usr/lib/libutmps.a" "${ROOT:?}/etc/logrotate.d" \
        "${ROOT:?}/sbin/apk.static.SIGN.RSA*" "${ROOT:?}/.SIGN.RSA*" "${ROOT:?}/.PKGINFO"
 
-# busybox: single static binary + applet symlinks
+# busybox: single static binary + applet symlinks.
+# Link EVERY applet this busybox build actually provides. The previous
+# hand-maintained list named applets busybox-static does not have (mke2fs,
+# mkfs.ext2, sfdisk) - those became dangling symlinks that fail at runtime
+# with "applet not found" - while omitting ones the rescue scripts genuinely
+# call (setsid, od, xxd, partprobe). Deriving the list from `busybox --list`
+# removes that whole class of bug.
 install -m 755 "$ROOT/bin/busybox.static" "$ROOT/bin/busybox"
 rm -f "$ROOT/bin/busybox.static"
-for applet in sh ash ls cat echo mkdir mknod mount umount switch_root reboot \
-              poweroff halt sleep ps grep sed awk cut head tail wc tr vi \
-              ifconfig route udhcpc ping \
-              blkid findfs fdisk sfdisk mkfs.vfat mkfs.ext2 mke2fs \
-              mkswap swapon losetup chroot tar gzip gunzip xz xzcat \
-              insmod rmmod lsmod dmesg uname hostname date df du free \
-              cp mv rm ln touch chmod chown dd sync which env \
-              mdev sysctl wget telnet tftp nc clear reset; do
+for applet in $("$ROOT/bin/busybox" --list); do
     ln -sf busybox "$ROOT/bin/$applet"
 done
+
+# Static guard: every command the rescue scripts invoke must resolve to a
+# real executable. A dangling symlink here means a broken rescue image, and
+# the failure only shows up on hardware - so fail the build instead.
+# This list is exactly the set used by rootfs/init, rootfs/init.d/99-disk-root
+# and rootfs/install-alpine. Do NOT add "nice to have" applets: busybox-static
+# 1.37.0 genuinely has no telnet, tftp or xz, and the previous hand-written
+# symlink list linked all three anyway, producing three dangling symlinks.
+REQUIRED_APPLETS="sh mount umount mkdir mknod rm rmdir cp mv ln chmod chown \
+touch cat echo printf grep sed awk cut head tail tr wc sort uniq sleep sync \
+stat find dd od xxd hexdump setsid switch_root findfs blkid fdisk mdev \
+partprobe blockdev ifconfig route udhcpc nc ping wget reboot poweroff halt \
+insmod rmmod lsmod dmesg uname hostname date df du free env which tar gzip \
+gunzip cpio chroot vi clear reset swapoff losetup mkswap swapon test expr"
+missing=""
+for applet in $REQUIRED_APPLETS; do
+    if [ ! -e "$ROOT/bin/$applet" ] || [ ! -x "$ROOT/bin/$applet" ]; then
+        missing="$missing $applet"
+    fi
+done
+if [ -n "$missing" ]; then
+    echo "ERROR: busybox-static is missing applets required by the rescue scripts:" >&2
+    echo "       $missing" >&2
+    echo "       This busybox build cannot support the rescue image." >&2
+    exit 1
+fi
+echo "applet symlinks OK ($(ls "$ROOT/bin" | wc -l) entries, all required present)"
 
 # udhcpc needs its hook script
 mkdir -p "$ROOT/usr/share/udhcpc"
@@ -158,6 +184,14 @@ echo "root:x:0:" > "$ROOT/etc/group"
 # ---- /init (PID 1) ---------------------------------------------------------
 cp rootfs/init "$ROOT/init"
 chmod 755 "$ROOT/init"
+
+# ---- handoff to an installed system ----------------------------------------
+# init calls /etc/init.d/99-disk-root: it finds the ext4 labelled wdmch-root
+# (p20 / SYSTEM_B) and switch_root()s into it. Without this the rescue image
+# can install a system but never boot it.
+mkdir -p "$ROOT/etc/init.d"
+cp rootfs/init.d/99-disk-root "$ROOT/etc/init.d/99-disk-root"
+chmod 755 "$ROOT/etc/init.d/99-disk-root"
 
 # ---- install-alpine helper (runs entirely from the USB stick) --------------
 mkdir -p "$ROOT/usr/local/sbin"

@@ -2,14 +2,24 @@
 build/
 .work/
 
-# Source clones
-.work/*/
-!work/
-
 # Config secrets
 config/build.env
 config/*.key
 config/*.pem
+
+# Generated kernel config: the build writes ./.config next to the sources.
+# The tracked fragment is config/kernel.config - do not confuse the two.
+.config
+
+# Leftovers from a killed merge_config.sh run
+.merge_tmp.config.*
+.tmp.config.*
+
+# Packaged artifacts: built into build/ and uploaded by CI, never committed.
+flash.zip
+
+# Stray directory from an unquoted $APK_DIR in an earlier script version
+$APK_DIR/
 
 # OS files
 *.swp
@@ -34,15 +44,3 @@ Thumbs.db
 *.log
 coverage/
 .nox/
-
-# Kernel build artifacts in source tree
-# kernel/ scripts are tracked source files; build/ output is ignored
-arch/arm64/
-drivers/
-fs/
-net/
-security/
-sound/
-staging/
-usr/
-*.config.* 

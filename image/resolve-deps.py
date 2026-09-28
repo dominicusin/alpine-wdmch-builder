@@ -77,15 +77,15 @@ def parse_apkindex(path):
             elif line.startswith('D:'):
                 deps.extend(line[2:].split())
             elif line.startswith('p:'):
-                # provider: providername=version
+                # provider: name=version. Shared objects appear here as
+                # so:libfoo.so.1=1.2 - APKINDEX v2 has no separate So: line
+                # (S: is the installed size), so this is the only place
+                # sonames exist.
                 parts = line[2:].split('=', 1)
                 if len(parts) == 2:
                     provides[parts[0]] = parts[1]
-            elif line.startswith('So:'):
-                # soname: libname=version
-                parts = line[2:].split('=', 1)
-                if len(parts) == 2:
-                    provides[parts[0]] = parts[1]
+                elif parts and parts[0]:
+                    provides[parts[0]] = ''
             elif line.startswith('FILENAME:'):
                 filename = line[9:]
         
@@ -114,13 +114,25 @@ def resolve_closure(main_index, community_index, seeds):
     all_pkgs.update(main_index)
     all_pkgs.update(community_index)
     
-    # Index by soname/provider for So: resolution
+    # Index by soname/provider.
+    #
+    # APKINDEX v2 has no `So:` line at all - `S:` is the installed size and
+    # every shared object arrives as `p:so:<soname>=<version>`. The keys
+    # stored here MUST therefore be the BARE soname, because that is what the
+    # dependency walk below looks up (it strips the `so:` prefix off a `D:`
+    # entry). Indexing the prefixed form makes every `so:` dependency
+    # unresolvable and silently truncates the closure - which is how
+    # e2fsprogs ended up on the USB stick without e2fsprogs-libs, libblkid,
+    # libuuid and libcom_err, so mke2fs could not run at all.
     soname_to_pkg = {}
     for pkgname, info in all_pkgs.items():
-        for soname, ver in info.get('provides', {}).items():
-            if soname not in soname_to_pkg:
-                soname_to_pkg[soname] = []
-            soname_to_pkg[soname].append(pkgname)
+        for prov, ver in info.get('provides', {}).items():
+            key = prov[3:] if prov.startswith('so:') else prov
+            if not key:
+                continue
+            soname_to_pkg.setdefault(key, [])
+            if pkgname not in soname_to_pkg[key]:
+                soname_to_pkg[key].append(pkgname)
         # Index by provided cmd: and file paths
         for dep in info.get('deps', []):
             if dep.startswith('p:'):
@@ -131,7 +143,8 @@ def resolve_closure(main_index, community_index, seeds):
                         cmdname = cmdname[4:]
                     if cmdname not in soname_to_pkg:
                         soname_to_pkg[cmdname] = []
-                    soname_to_pkg[cmdname].append(pkgname)
+                    if pkgname not in soname_to_pkg[cmdname]:
+                        soname_to_pkg[cmdname].append(pkgname)
     
     # Also index /bin/sh provider
     for pkgname, info in all_pkgs.items():
@@ -174,6 +187,12 @@ def resolve_closure(main_index, community_index, seeds):
         
         # Add dependencies
         for dep in info.get('deps', []):
+            # APKINDEX v2 encodes conflicts in D: with a leading '!', e.g.
+            # "D:!vlan". That is a negative constraint, not a dependency -
+            # treating it as a package name makes the resolver look for a
+            # package called "!vlan" and report it missing.
+            if dep.startswith('!'):
+                continue
             # Skip virtual deps like so:libc.musl-aarch64.so.1
             if dep.startswith('so:'):
                 soname = dep[3:]
@@ -189,15 +208,26 @@ def resolve_closure(main_index, community_index, seeds):
             # Skip pc: deps (pkg-config)
             if dep.startswith('pc:'):
                 continue
-            # Skip virtual provides that are paths or special virtuals
+            # Skip virtual provides that are paths
             pkg = re.split(r'[><=]', dep)[0]
-            if pkg.startswith('/') or pkg in ('ifupdown-any',):
-                if pkg == 'ifupdown-any':
-                    if 'ifupdown-ng-openrc' not in processed and 'ifupdown-ng-openrc' not in missing:
-                        to_process.append('ifupdown-ng-openrc')
+            if pkg.startswith('/'):
                 continue
             if pkg not in processed and pkg not in missing:
-                to_process.append(pkg)
+                # A dependency name is either a real package or a virtual
+                # satisfied through a provider. Try the real package first,
+                # then the provider index - never guess a hardcoded package
+                # name. (The old code mapped `ifupdown-any` to
+                # "ifupdown-ng-openrc", which is a *virtual* provided by
+                # openrc, not a package; the real one is `ifupdown-ng`.)
+                if pkg in all_pkgs or pkg not in soname_to_pkg:
+                    to_process.append(pkg)
+                else:
+                    for provider in soname_to_pkg[pkg]:
+                        if provider not in processed and provider not in missing:
+                            to_process.append(provider)
+                            break
+                    else:
+                        to_process.append(pkg)
     
     return sorted(filenames), missing
 
@@ -205,17 +235,38 @@ def main():
     parser = argparse.ArgumentParser(description='Resolve Alpine package dependencies')
     parser.add_argument('--main', required=True, help='Path to main APKINDEX.tar.gz')
     parser.add_argument('--community', required=True, help='Path to community APKINDEX.tar.gz')
+    parser.add_argument('--tsv', action='store_true',
+                        help='emit "repo<TAB>name<TAB>version<TAB>filename" instead of bare filenames')
     parser.add_argument('seeds', nargs='+', help='Seed package names')
     args = parser.parse_args()
-    
+
     main_index = parse_apkindex(args.main)
     community_index = parse_apkindex(args.community)
-    
+
     filenames, missing = resolve_closure(main_index, community_index, args.seeds)
-    
-    # Output filenames
-    for f in filenames:
-        print(f)
+
+    # Track which repo each selected package actually lives in, so a downloader
+    # never has to re-derive the package name from the filename (which is
+    # ambiguous for names containing dashes and version-like segments).
+    origin = {}
+    for pkg, info in community_index.items():
+        origin[pkg] = 'community'
+    for pkg, info in main_index.items():
+        origin.setdefault(pkg, 'main')
+
+    by_filename = {}
+    for pkg, info in community_index.items():
+        by_filename[info['filename']] = ('community', pkg, info['version'])
+    for pkg, info in main_index.items():
+        by_filename.setdefault(info['filename'], ('main', pkg, info['version']))
+
+    if args.tsv:
+        for f in filenames:
+            repo, pkg, ver = by_filename.get(f, ('main', '?', '?'))
+            print(f"{repo}\t{pkg}\t{ver}\t{f}")
+    else:
+        for f in filenames:
+            print(f)
     
     if missing:
         fail_dir = os.environ.get('APK_CACHE', '.work/apk-cache-offline')

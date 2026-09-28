@@ -59,12 +59,16 @@ mem_or32 $((0x9801B100)) $((0x80000))  || echo "[init] WARN: gpio dir poke faile
 mem_or32 $((0x9801B110)) $((0x80000))  || echo "[init] WARN: gpio out poke failed"
 
 # --- wait for the SATA disk ------------------------------------------------------
-# host1/host2 are ahci_rtd1295's fixed SCSI host numbers (from monarch).
-echo "[init] waiting for SATA disk to link..."
+# ahci_rtd1295 only finishes probing after its PHY comes up, and the board's
+# drive takes several seconds to negotiate. Host numbers 1 and 2 are this
+# driver's fixed SCSI hosts. Do NOT key off /dev/sd? letters: the rescue USB
+# stick claims sda on this hardware, so the internal disk is whatever comes
+# after it.
+echo "[init] waiting for the internal SATA disk..."
 i=0
-while [ $i -lt 15 ]; do
+while [ $i -lt 20 ]; do
     if [ -e /sys/bus/scsi/devices/1:0:0:0 ] || [ -e /sys/bus/scsi/devices/2:0:0:0 ]; then
-        echo "[init] SATA disk present after ${i}s"
+        echo "[init] internal disk present after ${i}s"
         sleep 1
         break
     fi
@@ -75,14 +79,15 @@ echo "[init] block devices:"
 cat /proc/partitions
 
 # --- mount the rescue USB stick ---------------------------------------------------
-# apks/ (offline Alpine packages) and boot/ live on the FAT stick.
-usb_mounted=""
+# The vendor loader reads fixed filenames from the ROOT of the FAT stick.
+# apks/ and sata.uImage are both top-level entries - there is no boot/ dir.
+usb_dev=""
 for i in 1 2 3 4 5 6 7 8 9 10; do
     for dev in /dev/sd?1 /dev/sd?2 /dev/sd?3; do
         [ -b "$dev" ] || continue
         if mount -t vfat -o ro "$dev" /media/usb 2>/dev/null; then
-            if [ -d /media/usb/apks ] || [ -d /media/usb/boot ]; then
-                usb_mounted="$dev"
+            if [ -f /media/usb/sata.uImage ] || [ -d /media/usb/apks ]; then
+                usb_dev="$dev"
                 break 2
             fi
             umount /media/usb 2>/dev/null
@@ -90,11 +95,28 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     done
     sleep 1
 done
-if [ -n "$usb_mounted" ]; then
-    echo "[init] rescue USB mounted ($usb_mounted -> /media/usb)"
+if [ -n "$usb_dev" ]; then
+    echo "[init] rescue USB mounted ($usb_dev -> /media/usb)"
 else
     echo "[init] WARNING: rescue USB stick not found under /media/usb"
 fi
+
+# --- identify the internal SATA disk ---------------------------------------------
+# Everything that is not the rescue stick. Refusing to guess matters: the
+# rescue stick claims /dev/sda here, so a hardcoded "install-alpine /dev/sda"
+# in the banner would wipe the stick the system is running from.
+internal_disk=""
+for dev in /dev/sda /dev/sdb /dev/sdc /dev/sdd; do
+    [ -b "$dev" ] || continue
+    case "$dev" in
+        "${usb_dev%[0-9]}") continue ;;   # this is the rescue stick
+    esac
+    if grep -qs "[[:space:]]$dev[[:space:]]" /proc/mounts; then
+        continue                        # something is mounted on it
+    fi
+    internal_disk="$dev"
+    break
+done
 
 # --- network: DHCP on eth0 ---------------------------------------------------------
 ifconfig lo 127.0.0.1 up 2>/dev/null || true
@@ -126,19 +148,57 @@ echo "========================================================"
 echo " WDMCH Rescue - WD My Cloud Home (RTD1295 / $(uname -r))"
 echo "========================================================"
 echo " SSH:    ssh root@$addr      (public-key only, no password)"
-echo " USB:    ${usb_mounted:-not found} -> /media/usb"
-echo " Disks:  $(grep -c . /proc/partitions) partition entries (see /proc/partitions)"
+echo " Stick:  ${usb_dev:-not found} -> /media/usb"
+if [ -n "$internal_disk" ]; then
+    echo " Disk:   $internal_disk      (internal SATA - this is the install target)"
+    echo ""
+    echo " Install Alpine Linux (writes p20 / SYSTEM_B only):"
+    echo "   install-alpine $internal_disk          # interactive"
+    echo "   install-alpine $internal_disk --yes    # non-interactive"
+else
+    echo " Disk:   NOT DETECTED - check /proc/partitions and dmesg"
+fi
 echo ""
-echo " Install Alpine Linux to the internal SATA disk:"
-echo "   install-alpine /dev/sda          # interactive, offline (USB apks)"
-echo "   install-alpine /dev/sda --yes    # non-interactive"
+echo " Rescue shell instead of the installed system:"
+echo "   touch /media/usb/norescue"
 echo "========================================================"
 echo ""
 
-# --- check for rootfs on internal disk ---
-if [ -x /etc/init.d/99-disk-root ]; then
-    /etc/init.d/99-disk-root
+# --- hand over to an installed system ----------------------------------------------
+# 99-disk-root finds the ext4 labelled wdmch-root (p20 / SYSTEM_B) and
+# switch_root()s into it. It execs on success and returns on any failure,
+# in which case the rescue shell below still comes up.
+handoff_available=0
+if [ -f /media/usb/norescue ]; then
+    echo "[init] norescue marker present - skipping the handoff to the installed system"
+elif [ -n "$(findfs LABEL=wdmch-root 2>/dev/null)" ]; then
+    handoff_available=1
 fi
+
+if [ "$handoff_available" = "1" ] && [ -x /etc/init.d/99-disk-root ]; then
+    echo ""
+    echo "[init] an installed Alpine system was found on the internal disk."
+    echo "[init] handing over in 20s - press ENTER on the console to keep the rescue shell."
+    i=20
+    cancel=no
+    while [ $i -gt 0 ]; do
+        if read -t 1 _key 2>/dev/null; then
+            cancel=yes
+            break
+        fi
+        i=$((i - 1))
+        printf '.'
+    done
+    echo ""
+    if [ "$cancel" = "yes" ]; then
+        echo "[init] console input - staying in the rescue shell"
+        echo "[init] remove /media/usb/norescue to hand over on the next boot"
+    else
+        /etc/init.d/99-disk-root
+        echo "[init] handoff returned - dropping to the rescue shell"
+    fi
+fi
+
 # --- interactive shell on the serial console, respawned on exit ---------------------
 while true; do
     setsid sh -c 'exec sh </dev/console >/dev/console 2>&1'

@@ -1,9 +1,12 @@
-.PHONY: all clean help build kernel dtb rootfs package validate test release-dry-run
+.PHONY: all clean help build kernel dtb rootfs package validate test release release-dry-run
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.1.0-dev")
-KERNEL_REF := $(shell grep KERNEL_REF config/source-lock.env 2>/dev/null | cut -d= -f2)
+KERNEL_REF := $(shell grep -m1 '^KERNEL_REF=' config/source-lock.env 2>/dev/null | cut -d= -f2)
 
 all: build
+
+release:
+	bash scripts/release.sh
 
 help:
 	@echo "Alpine WDMCH Builder v$(VERSION)"
@@ -41,20 +44,22 @@ package:
 	bash image/package-rescue.sh
 	bash image/verify-image.sh
 
+# NOTE: no `|| true` on the validators or tests below. Swallowing a failure
+# here is how a broken artifact previously shipped under a green build - if a
+# check cannot run (missing artifact, not built yet) it must say so loudly.
 validate:
 	bash tests/test_tools.sh
-	python3 tools/check-image-header.py build/release/sata.uImage || true
-	python3 tools/check-fdt.py build/release/rescue.sata.dtb || true
-	bash tools/check-artifacts.sh build/release || true
+	python3 tools/check-image-header.py build/release/sata.uImage
+	python3 tools/check-fdt.py build/release/rescue.sata.dtb
+	bash tools/check-artifacts.sh build/release
 
 test: validate
 	bash tests/test_repo_layout.sh
 	bash tests/test_kernel_metadata.sh build/kernel/Image build/kernel/kernel-release.txt
-	bash tests/test_dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb build/kernel/rtd1295-wd-mycloud-home.dts || true
-	bash tests/test_rootfs.sh build/rootfs $$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none) || true
-	bash tests/test_image.sh build/release || true
-	bash tests/test_tools.sh
-	bash tests/test_workflows.sh || true
+	bash tests/test_dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb build/kernel/rtd1295-wd-mycloud-home.dts
+	bash tests/test_rootfs.sh build/rootfs $$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none)
+	bash tests/test_image.sh build/release
+	bash tests/test_workflows.sh
 
 clean:
 	./build-image.sh --clean

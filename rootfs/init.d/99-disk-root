@@ -1,0 +1,112 @@
+#!/bin/sh
+# 99-disk-root - hand over from the rescue initramfs to the installed system.
+#
+# Run by /init after networking and SSH are up. Finds the ext4 filesystem
+# labelled "wdmch-root" (written by install-alpine into p20 / SYSTEM_B),
+# verifies it really is a bootable system, and switch_root()s into it.
+#
+# Everything here is best-effort: any failure leaves the rescue shell intact,
+# which is the whole point of a rescue image.
+#
+# ESCAPE HATCH
+#   touch norescue        (in the ROOT of the USB stick)
+# skips the handoff and drops to the rescue shell instead. The marker is
+# one-shot-safe to remove: delete the file and the next boot hands over.
+
+ROOT_LABEL=wdmch-root
+NEWROOT=/newroot
+USB_ROOT=/media/usb
+
+kmsg() { echo "<6>wdmch-rescue: $*" > /dev/kmsg 2>/dev/null; }
+say()  { echo "[handoff] $*"; kmsg "$*"; }
+
+is_mounted() { grep -qs "[[:space:]]$1[[:space:]]" /proc/mounts; }
+
+# --- escape hatch ------------------------------------------------------------
+if [ -f "$USB_ROOT/norescue" ]; then
+    say "norescue marker on the USB stick - staying in the rescue shell"
+    say "delete $USB_ROOT/norescue to hand over to the installed system"
+    exit 0
+fi
+
+# --- find the root filesystem -------------------------------------------------
+# Primary: the filesystem label. Independent of which /dev/sd? letter or
+# partition number the kernel ends up assigning.
+candidate=""
+if command -v findfs >/dev/null 2>&1; then
+    candidate=$(findfs "LABEL=$ROOT_LABEL" 2>/dev/null)
+fi
+
+# Fallback for an unlabelled system: the partitions the pinned upstream
+# rescue init scans (symops/monarch-6.18 initramfs/init probes sda9, sda18
+# and sda19..sda24), filtered to ext4 with a usable init inside.
+if [ -z "$candidate" ]; then
+    say "no filesystem labelled $ROOT_LABEL - scanning the WDMCH layout"
+    for p in /dev/sda20 /dev/sda19 /dev/sda21 /dev/sda22 /dev/sda24 /dev/sda9; do
+        [ -b "$p" ] || continue
+        [ "$p" = "$candidate" ] && continue
+        if mkdir -p "$NEWROOT" && mount -t ext4 "$p" "$NEWROOT" 2>/dev/null; then
+            if [ -x "$NEWROOT/sbin/init" ] || [ -x "$NEWROOT/init" ] \
+               || [ -x "$NEWROOT/usr/sbin/init" ] || [ -x "$NEWROOT/lib/systemd/systemd" ]; then
+                candidate="$p"
+                break
+            fi
+            umount "$NEWROOT" 2>/dev/null
+        fi
+    done
+fi
+
+if [ -z "$candidate" ]; then
+    say "no installed system found - staying in the rescue shell"
+    say "(expected an ext4 filesystem labelled $ROOT_LABEL, normally p20 / SYSTEM_B)"
+    exit 0
+fi
+
+# --- mount and verify ---------------------------------------------------------
+mkdir -p "$NEWROOT"
+if ! is_mounted "$NEWROOT"; then
+    if ! mount -t ext4 "$candidate" "$NEWROOT" 2>/dev/null; then
+        say "cannot mount $candidate - staying in the rescue shell"
+        exit 0
+    fi
+fi
+
+init=""
+for i in /sbin/init /init /usr/sbin/init /lib/systemd/systemd /usr/lib/systemd/systemd; do
+    if [ -x "$NEWROOT$i" ]; then init="$i"; break; fi
+done
+
+if [ -z "$init" ]; then
+    say "$candidate has no usable init - not an installed system"
+    say "staying in the rescue shell"
+    umount "$NEWROOT" 2>/dev/null
+    exit 0
+fi
+
+say "found installed system on $candidate (init $init)"
+
+# --- prep the new root's mounts ----------------------------------------------
+mkdir -p "$NEWROOT/proc" "$NEWROOT/sys" "$NEWROOT/dev" "$NEWROOT/run"
+is_mounted "$NEWROOT/proc" || mount -t proc proc "$NEWROOT/proc"
+is_mounted "$NEWROOT/sys"  || mount -t sysfs sysfs "$NEWROOT/sys"
+is_mounted "$NEWROOT/dev"  || mount -o bind /dev "$NEWROOT/dev"
+if [ -d /run ]; then
+    is_mounted "$NEWROOT/run" || mount -o bind /run "$NEWROOT/run"
+fi
+
+# Carry the SSH authorized key across so the installed system stays reachable
+# even if the copy made by install-alpine went missing.
+if [ -f /root/.ssh/authorized_keys ] && [ ! -f "$NEWROOT/root/.ssh/authorized_keys" ]; then
+    mkdir -p "$NEWROOT/root/.ssh"
+    cp /root/.ssh/authorized_keys "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null
+    chmod 700 "$NEWROOT/root/.ssh" 2>/dev/null
+    chmod 600 "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null
+    say "copied the rescue SSH key into the installed system"
+fi
+
+# --- hand over ----------------------------------------------------------------
+say "switch_root $NEWROOT $init - the USB stick can stay plugged in"
+say "touch $USB_ROOT/norescue before the next boot to get the rescue shell back"
+sync
+
+exec switch_root -c /dev/console "$NEWROOT" "$init"

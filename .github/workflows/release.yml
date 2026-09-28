@@ -73,8 +73,11 @@ jobs:
 
       - name: Run all tests
         run: |
+          echo "=== test_tools.sh ==="
           bash tests/test_tools.sh
+          echo "=== test_workflows.sh ==="
           bash tests/test_workflows.sh
+          echo "=== qemu/smoke.sh ==="
           bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
 
       - name: Create release archive
@@ -85,8 +88,20 @@ jobs:
             --exclude='.git' \
             --exclude='*.pyc' \
             build/release/
-          # Use the FULL flash.zip from build artifacts (includes all APKs)
-          cp release-artifacts/flash.zip "alpine-wdmch-rescue-${VERSION}-flash.zip"
+          # This job builds the image from source (./build-image.sh ->
+          # image/package-rescue.sh), so the FULL flash.zip with all APKs is
+          # already in the workspace at build/flash.zip. There is no artifact to
+          # download: build.yml does not trigger on tag pushes, and this run
+          # uploads no artifacts, so actions/download-artifact (which defaults
+          # to the CURRENT run) would fail to find wdmch-rescue-release.
+          test -s build/flash.zip || { echo "FAIL: build/flash.zip missing or empty"; exit 1; }
+          APK_COUNT=$(unzip -l build/flash.zip | grep -c '\.apk$' || true)
+          echo "flash.zip contains $APK_COUNT APK packages"
+          if [ "$APK_COUNT" -lt 20 ]; then
+            echo "FAIL: flash.zip has only $APK_COUNT APKs (< 20) — offline repo incomplete" >&2
+            exit 1
+          fi
+          cp build/flash.zip "alpine-wdmch-rescue-${VERSION}-flash.zip"
           ls -lh "alpine-wdmch-rescue-${VERSION}-flash.zip"
 
       - name: Copy release artifacts for GitHub Release
@@ -165,6 +180,9 @@ jobs:
 
       - name: Run tests
         run: |
+          echo "=== test_tools.sh ==="
           bash tests/test_tools.sh
+          echo "=== test_workflows.sh ==="
           bash tests/test_workflows.sh
+          echo "=== qemu/smoke.sh ==="
           bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"

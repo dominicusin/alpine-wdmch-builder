@@ -103,51 +103,64 @@ OK=0
 FAIL=0
 NEVER=0
 
-PKGS_MAIN=(
-    alpine-base alpine-baselayout alpine-baselayout-data alpine-conf
-    alpine-keys alpine-release apk-tools busybox busybox-mdev-openrc
-    busybox-openrc busybox-suid ca-certificates-bundle chrony dhcpcd-openrc
-    dropbear e2fsprogs musl musl-utils openrc openssl scanelf tzdata util-linux
-)
-PKGS_COMM=(kexec-tools)
+# Seed packages. Everything else on the stick is derived from these by
+# image/resolve-deps.py - there is deliberately NO hand-maintained package
+# list. A hardcoded list is what let e2fsprogs reach the stick without
+# e2fsprogs-libs, libblkid, libuuid and libcom_err, so mke2fs could not run
+# and install-alpine died at the first filesystem command.
+#
+# openrc-init and ifupdown-ng are NOT optional extras - a full offline install
+# of alpine-base alone yields NO /sbin/init (nothing can be booted or handed
+# over to) and NO /sbin/ifup (the `networking` service has nothing to call).
+# busybox-ifupdown, which the resolver reaches through the ifupdown-any
+# virtual, is a 1.2 KB placeholder package that ships no binaries at all.
+SEEDS=(alpine-base openrc-init ifupdown-ng dropbear e2fsprogs kexec-tools)
 
-log "=== Downloading ${#PKGS_MAIN[@]} main + ${#PKGS_COMM[@]} community packages ==="
+log "=== Resolving dependency closure for: ${SEEDS[*]} ==="
+CLOSURE=$(python3 image/resolve-deps.py --tsv \
+              --main "$MAIN_INDEX" \
+              --community "$COMM_INDEX" \
+              "${SEEDS[@]}" 2>"$LOG.resolve-err" | sort)
+RC=$?
+if [ $RC -ne 0 ] || [ -z "$CLOSURE" ]; then
+    log "ERROR: dependency resolution failed (rc=$RC)"
+    cat "$LOG.resolve-err" >&2 2>/dev/null || true
+    exit 1
+fi
+if [ -s "$LOG.resolve-err" ]; then
+    log "WARNING: resolver reported unresolved dependencies:"
+    sed 's/^/    /' "$LOG.resolve-err"
+    log "    the offline repo would be INCOMPLETE - the install would fail."
+    exit 1
+fi
+rm -f "$LOG.resolve-err"
+
+n_closure=$(echo "$CLOSURE" | wc -l)
+log "Closure resolved: $n_closure packages"
 log ""
 
-for pkg in "${PKGS_MAIN[@]}"; do
-    ver=$(get_version "$pkg" "$MAIN_INDEX" || true)
-    if [ -z "$ver" ]; then
-        log "[NOVER] $pkg — no version in APKINDEX"
-        NEVER=$((NEVER+1))
-        continue
-    fi
-    if download_pkg "$pkg" "$ver" "$MAIN_URL" "$MAIN_DIR"; then
-        OK=$((OK+1))
-    else
-        FAIL=$((FAIL+1))
-    fi
-done
-
-log ""
-log "=== Community packages ==="
-for pkg in "${PKGS_COMM[@]}"; do
-    ver=$(get_version "$pkg" "$COMM_INDEX" || get_version "$pkg" "$MAIN_INDEX" || true)
-    if [ -z "$ver" ]; then
-        log "[NOVER] $pkg — no version in APKINDEX"
-        NEVER=$((NEVER+1))
-        continue
-    fi
-    if [ -n "$(get_version "$pkg" "$COMM_INDEX" 2>/dev/null || true)" ]; then
+# TSV: repo <TAB> name <TAB> version <TAB> filename. The repo comes from the
+# resolver, so no name has to be recovered from a filename here.
+while IFS=$'\t' read -r repo pkg ver file; do
+    [ -n "$file" ] || continue
+    if [ "$repo" = "community" ]; then
         url="$COMMUNITY_URL"; dir="$COMM_DIR"
     else
         url="$MAIN_URL"; dir="$MAIN_DIR"
     fi
     if download_pkg "$pkg" "$ver" "$url" "$dir"; then
-        OK=$((OK+1))
+        OK=$((OK + 1))
     else
-        FAIL=$((FAIL+1))
+        FAIL=$((FAIL + 1))
     fi
-done
+done <<< "$CLOSURE"
+
+if [ "$FAIL" -ne 0 ]; then
+    log ""
+    log "ERROR: $FAIL package(s) failed to download - the offline repo is incomplete."
+    log "       Refusing to produce a stick that cannot complete an install."
+    exit 1
+fi
 
 log ""
 log "=== Copying APKINDEX files ==="

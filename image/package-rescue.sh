@@ -156,12 +156,33 @@ BOOT THE BOX
 
 INSTALL ALPINE TO THE INTERNAL DISK (offline, no network needed)
   ssh root@<ip>
-  install-alpine /dev/sda          # interactive; add --yes to skip prompts
+  install-alpine <disk>        # <disk> is printed in the rescue banner
+                               # as "Disk:" - do NOT guess it
   # packages come from apks/ on this stick - no network needed
+
+WHAT install-alpine WRITES
+  Exactly one partition: p20 (SYSTEM_B), ext4, label "wdmch-root".
+  It does NOT create partitions and does NOT modify the partition table.
+  Left untouched: p1 (firmware table), the A/B/GOLD firmware slots
+  (p2-p17), p18 (CONFIG), p19, and your data in p22/p24.
+  A copy of the firmware table is saved to /root/wdmch-fw-table-backup.bin
+  on the installed system.
+
+BOOTING THE INSTALLED SYSTEM
+  The vendor U-Boot cannot boot from the internal disk - it only reads
+  boot files from this stick. So leave the stick plugged in: the rescue
+  kernel boots and hands over to the system on p20 automatically.
+
+  To get the RESCUE SHELL instead of the installed system:
+      touch norescue         # create this file in the ROOT of the stick
+
+  Optional - boot without the stick after a first successful boot:
+      /usr/local/sbin/boot-full-alpine --exec
 
 SAFETY
   - The vendor flash (A/B/GOLD slots) is never touched
-  - install-alpine ERASES the internal disk - all data will be lost
+  - install-alpine reformats ONE partition (p20) - anything on it is lost
+  - Your data partitions (p22 DATA, p24 DISKVOLUME1) are NOT touched
   - To return to stock firmware: remove the USB stick, power cycle
 READMEEOF
 echo "README.txt written"

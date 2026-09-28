@@ -1,97 +1,123 @@
 # Recovery Procedures
 
-## Booting the Rescue Image
+How to get a rescue shell on a WD My Cloud Home, and the boundaries you must not
+cross while doing it.
 
-### Physical USB Rescue Boot
+## First: always have a working rescue stick
 
-1. **Prepare USB storage**: Copy the three artifacts from `build/release/` to a USB storage device:
-   ```
-   /boot/
-     sata.uImage
-     rescue.sata.dtb
-     rescue.root.sata.cpio.gz_pad.img
-   ```
+Keep a known-good stick prepared at all times. It is the only way back into the
+box, because **the vendor U-Boot cannot boot from the internal SATA disk** —
+every boot goes through the USB stick.
 
-2. **Power off** the WD My Cloud Home
+## Booting the rescue image
 
-3. **Insert USB** storage device into the front USB port
+### 1. Prepare the stick
 
-4. **Press and hold** the reset button while powering on
-
-5. **Boot sequence**:
-   - Vendor ROM initializes
-   - U-Boot detects USB storage
-   - Loads `sata.uImage` (patched kernel) and `rescue.sata.dtb` (DTB)
-   - Kernel boots and executes `/init` as PID 1
-   - Filesystems are mounted
-   - Ethernet comes up via DHCP
-   - Dropbear SSH starts
-   - Root shell is available
-
-## SSH Access
-
-After boot:
-1. Find the IP address via serial console or router DHCP lease
-2. Connect via SSH: `ssh root@<ip>`
-3. **Public-key authentication only** — no password is configured
-4. Dropbear SSH server is running on port 22
-
-## Optional: Full Alpine Boot via kexec
-
-If a full Alpine kernel and DTB are present on the rescue filesystem:
+Copy the build tree to the **root** of a FAT32 stick. The loader reads fixed
+filenames from the root; there is **no `boot/` subdirectory**.
 
 ```bash
-/usr/local/sbin/boot-full-alpine
+mount /dev/sdX1 /mnt/stick
+cp -r build/usb-tree-root/* /mnt/stick/
+sync
+cd /mnt/stick && sha256sum -c SHA256SUMS
 ```
 
-This loads the full Alpine kernel via `kexec` and boots it, replacing the rescue environment.
+The stick root holds `sata.uImage`, `rescue.sata.dtb`,
+`rescue.root.sata.cpio.gz_pad.img`, `SHA256SUMS`, `manifest.json`, `README.txt`
+and `apks/`. `apks/` is the only subdirectory. See [usb-rescue.md](usb-rescue.md).
 
-## Recovery Boundary
+### 2. Boot
 
-### DO NOT DO:
+1. Power off the WD My Cloud Home.
+2. Insert the stick into the front USB port.
+3. Press and **hold the reset button** while powering on.
+4. U-Boot runs `boot_rescue_from_usb`, loads the three artifacts from the stick
+   root into RAM (initramfs staged at physical `0x02200000`, 4 MiB).
+5. The rescue kernel boots and runs `/init` as PID 1.
 
-- **DO NOT boot the GOLD partition** — GOLD is a factory-reset appliance, not a safe fallback
-- **DO NOT write A/B/GOLD firmware slots** — this project is read-only with respect to NAS firmware
-- **DO NOT flash any firmware** without first backing up existing WDMCH firmware tables
+If the box has no factory partition, U-Boot enters the same path
+automatically without the reset button.
 
-### DO:
+## Getting the rescue shell instead of the installed system
 
-- **DO back up existing WDMCH firmware tables** before any future flashing work
-- **DO use `sgissi/wdmch-tools`** (`fwtablectl`) for firmware table manipulation if needed
-- **DO test on non-production hardware** first
+Normally the rescue init looks for a filesystem labelled `wdmch-root` on the
+internal disk and, if it holds a valid system, `switch_root`s into it. To skip
+that handoff and get the rescue environment itself, create an empty file named
+`norescue` in the **root** of the stick:
 
-## Serial Console
-
-Expected boot output (examples based on observed WDMCH boot logs):
-
+```bash
+touch /mnt/stick/norescue
 ```
-U-Boot > sf probe
-U-Boot > fatload usb 0:1 0x48000000 /boot/sata.uImage
-## Loading File from usb0 ... OK
-U-Boot > fatload usb 0:1 0x49000000 /boot/rescue.sata.dtb
-## Loading File from usb0 ... OK
-U-Boot > booti 0x48000000 - 0x49000000
-## Starting kernel ...
+
+Remove the file to restore normal handoff.
+
+## SSH access
+
+1. Find the IP from the serial console or the router's DHCP lease.
+2. `ssh root@<ip>` — dropbear listens on **port 22**.
+3. **Public-key authentication only.** No root password is configured and
+   password auth is refused. The key is baked in at build time from
+   `WDMCH_SSH_AUTHORIZED_KEY`.
+
+## Booting the installed system
+
+Normally automatic: the rescue init finds `wdmch-root`, mounts it and switches
+root, so the box continues into the installed Alpine with the stick still
+plugged in.
+
+To boot without the stick, on the installed system:
+
+```bash
+/usr/local/sbin/boot-full-alpine   # prepares kexec from the on-disk /boot
+kexec -e                           # reboots into it
+```
+
+## Recovery boundary
+
+### DO NOT
+
+- **DO NOT boot the GOLD partition.** GOLD is a factory-reset appliance, not a
+  safe fallback.
+- **DO NOT write the A/B/GOLD firmware slots.**
+- **DO NOT repartition the internal disk.** The factory GPT has 24 fixed
+  partitions; destroying it can leave the box unbootable.
+- **DO NOT flash any firmware** without a firmware-table backup first.
+
+### DO
+
+- **DO back up the firmware table** (p1) before any flashing work:
+
+  ```bash
+  dd if=/dev/sda1 of=fw-table-backup.bin bs=512
+  ```
+
+- **DO** keep a second known-good stick if the box has user data on it.
+- **DO** use `sgissi/wdmch-tools` (`fwtablectl`) for firmware-table work, if
+  ever needed.
+- **DO** test on non-production hardware first.
+
+## Serial console
+
+Indicative output. Exact text varies with kernel configuration and hardware
+revision — this is not byte-for-byte guaranteed.
+
+```text
+U-Boot > boot_rescue_from_usb
+Loading file from usb0 ... OK
 
 [    0.000000] Booting Linux on physical CPU 0x0
-[    0.000000] Linux version 6.18.x (builder@host)
+[    0.000000] Linux version 6.18.x
 [    0.000000] Machine model: WD My Cloud Home
 [    0.000000] Memory: 1024MB
 [    0.000000] Console: ttyS0
 ...
 === WDMCH Rescue Init ===
-Mounting filesystems...
-Bringing up eth0...
-Starting Dropbear SSH...
-=== Rescue shell ===
 ```
 
-**Note**: Serial output may vary based on kernel configuration and hardware revision. These are examples, not guaranteed byte-for-byte output.
+## When a boot fails
 
-## Troubleshooting
-
-- **No boot from USB**: Verify USB storage is formatted correctly and files are in `/boot/`
-- **Kernel panic**: Check `sata.uImage` header values (code0=0x91005A4D, text_offset=0x200000, pe_offset=0x40)
-- **No network**: Verify `r8169soc` driver is loaded and DHCP server is available
-- **SSH not accessible**: Check Dropbear configuration and authorized_keys permissions
-- **kexec fails**: Ensure full Alpine kernel and DTB are present at `/boot/alpine/`
+Go to [DEBUGGING.md](DEBUGGING.md) for symptom-by-symptom diagnosis: no boot
+from USB, kernel panic, header values, no network, SSH refused, kexec
+failures, and how to read `/proc/partitions` and `dmesg` from a live rescue
+shell.

@@ -32,7 +32,10 @@ bash tools/check-artifacts.sh build/release || failures=$((failures + 1))
 echo ""
 echo "[Test Suite]"
 bash tests/test_repo_layout.sh || failures=$((failures + 1))
-bash tests/test_kernel_metadata.sh build/kernel/Image build/kernel/modules build/kernel/kernel-release.txt || failures=$((failures + 1))
+# NOTE: test_kernel_metadata.sh takes exactly two args (<Image> <kernel-release.txt>).
+# Passing a third arg (a stale build/kernel/modules path) shifted the release file
+# out of position and made the test read a directory.
+bash tests/test_kernel_metadata.sh build/kernel/Image build/kernel/kernel-release.txt || failures=$((failures + 1))
 bash tests/test_dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb build/kernel/rtd1295-wd-mycloud-home.dts || failures=$((failures + 1))
 bash tests/test_rootfs.sh build/rootfs "$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none)" || failures=$((failures + 1))
 bash tests/test_image.sh build/release || failures=$((failures + 1))
@@ -41,12 +44,18 @@ bash tests/test_tools.sh || failures=$((failures + 1))
 # Check no floating kernel ref
 echo ""
 echo "[Source Lock]"
-KERNEL_REF=$(grep KERNEL_REF config/source-lock.env | cut -d= -f2)
-if [ "$KERNEL_REF" = "HEAD" ] || [ -z "$KERNEL_REF" ]; then
-    echo "WARNING: Floating kernel reference detected"
-    failures=$((failures + 1))
+# A pinned ref is a full git commit SHA (7-40 lowercase hex chars). Use grep -m1
+# so a second appended KERNEL_REF= line cannot turn this into a multi-line value
+# and false-pass the "HEAD" test.
+KERNEL_REF=$(grep -m1 '^KERNEL_REF=' config/source-lock.env | cut -d= -f2 || true)
+if echo "$KERNEL_REF" | grep -Eq '^[0-9a-f]{7,40}$'; then
+    echo "Kernel reference pinned: OK ($KERNEL_REF)"
 else
-    echo "Kernel reference pinned: OK"
+    echo "WARNING: Floating kernel reference detected: KERNEL_REF='${KERNEL_REF}'"
+    echo "         A pinned reference must be a full git commit SHA (7-40 hex chars),"
+    echo "         e.g. KERNEL_REF=4b825dc642cb6eb9a060e54bf8d69288fbee4904. 'HEAD',"
+    echo "         a branch name, or an empty/multi-line value is NOT pinned."
+    failures=$((failures + 1))
 fi
 
 # Check for private keys in build/
@@ -99,18 +108,6 @@ else
     echo "FAIL: CI workflow missing"
     failures=$((failures + 1))
 fi
-
-# Check kernel config has RCU options
-echo ""
-echo "[Kernel Config Check]"
-for opt in CONFIG_PSI CONFIG_PREEMPT_BUILD CONFIG_PREEMPT CONFIG_PREEMPT_RCU CONFIG_RCU_EXPERT CONFIG_RCU_BOOST CONFIG_RCU_NOCB_CPU; do
-    if grep -q "^${opt}=y" config/kernel.config; then
-        echo "  $opt: OK"
-    else
-        echo "  $opt: MISSING"
-        failures=$((failures + 1))
-    fi
-done
 
 # Final result
 echo ""

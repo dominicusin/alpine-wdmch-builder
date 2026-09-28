@@ -1,99 +1,218 @@
-# docs/RECOVERY.md
+# Troubleshooting
 
-# Recovery Procedures
+Symptom-by-symptom diagnosis for the WDMCH USB rescue image. For the recovery
+workflow itself see [RECOVERY.md](RECOVERY.md); for the build and layout
+contract see [usb-rescue.md](usb-rescue.md) and [architecture.md](architecture.md).
 
-## Booting the Rescue Image
+## Triage order
 
-### Physical USB Rescue Boot
+Work top to bottom. Each step assumes the previous one passed.
 
-1. **Prepare USB storage**: Copy the three artifacts from `build/release/` to a USB storage device:
-   ```
-   /boot/
-     sata.uImage
-     rescue.sata.dtb
-     rescue.root.sata.cpio.gz_pad.img
-   ```
+1. Verify the stick contents and checksums from a Linux host.
+2. Watch the serial console through the U-Boot stage.
+3. From a rescue shell, read `/proc/partitions` and `dmesg`.
 
-2. **Power off** the WD My Cloud Home
+---
 
-3. **Insert USB** storage device into the front USB port
+## No boot from USB
 
-4. **Press and hold** the reset button while powering on
+**Symptoms:** the box powers on and starts its normal boot, or U-Boot reports a
+missing file, or nothing happens at all.
 
-5. **Boot sequence**:
-   - Vendor ROM initializes
-   - U-Boot detects USB storage
-   - Loads `sata.uImage` (patched kernel) and `rescue.sata.dtb` (DTB)
-   - Kernel boots and executes `/init` as PID 1
-   - Filesystems are mounted
-   - Ethernet comes up via DHCP
-   - Dropbear SSH starts
-   - Root shell is available
-
-## SSH Access
-
-After boot:
-1. Find the IP address via serial console or router DHCP lease
-2. Connect via SSH: `ssh root@<ip>`
-3. **Public-key authentication only** — no password is configured
-4. Dropbear SSH server is running on port 22
-
-## Optional: Full Alpine Boot via kexec
-
-If a full Alpine kernel and DTB are present on the rescue filesystem:
+**Cause 1 — files in the wrong place (most common).** The loader reads fixed
+filenames from the **root** of the FAT32 stick. A `boot/` subdirectory is wrong:
 
 ```bash
-/usr/local/sbin/boot-full-alpine
+ls /mnt/stick/
+# sata.uImage  rescue.sata.dtb  rescue.root.sata.cpio.gz_pad.img
+# SHA256SUMS  manifest.json  README.txt  apks/
 ```
 
-This loads the full Alpine kernel via `kexec` and boots it, replacing the rescue environment.
+**Cause 2 — corrupt copy.** Always check:
 
-## Recovery Boundary
-
-### DO NOT DO:
-
-- **DO NOT boot the GOLD partition** — GOLD is a factory-reset appliance, not a safe fallback
-- **DO NOT write A/B/GOLD firmware slots** — this project is read-only with respect to NAS firmware
-- **DO NOT flash any firmware** without first backing up existing WDMCH firmware tables
-
-### DO:
-
-- **DO back up existing WDMCH firmware tables** before any future flashing work
-- **DO use `sgissi/wdmch-tools`** (`fwtablectl`) for firmware table manipulation if needed
-- **DO test on non-production hardware** first
-
-## Serial Console
-
-Expected boot output (examples based on observed WDMCH boot logs):
-
-```
-U-Boot > sf probe
-U-Boot > fatload usb 0:1 0x48000000 /boot/sata.uImage
-## Loading File from usb0 ... OK
-U-Boot > fatload usb 0:1 0x49000000 /boot/rescue.sata.dtb
-## Loading File from usb0 ... OK
-U-Boot > booti 0x48000000 - 0x49000000
-## Starting kernel ...
-
-[    0.000000] Booting Linux on physical CPU 0x0
-[    0.000000] Linux version 6.18.x (builder@host)
-[    0.000000] Machine model: WD My Cloud Home
-[    0.000000] Memory: 1024MB
-[    0.000000] Console: ttyS0
-...
-=== WDMCH Rescue Init ===
-Mounting filesystems...
-Bringing up eth0...
-Starting Dropbear SSH...
-=== Rescue shell ===
+```bash
+cd /mnt/stick && sha256sum -c SHA256SUMS
 ```
 
-**Note**: Serial output may vary based on kernel configuration and hardware revision. These are examples, not guaranteed byte-for-byte output.
+Every listed file must report `OK`. A single `FAILED` means re-copy the file.
 
-## Troubleshooting
+**Cause 3 — wrong initramfs size.** The loader reads exactly 4194304 bytes:
 
-- **No boot from USB**: Verify USB storage is formatted correctly and files are in `/boot/`
-- **Kernel panic**: Check `sata.uImage` header values (code0=0x91005A4D, text_offset=0x200000, pe_offset=0x40)
-- **No network**: Verify `r8169soc` driver is loaded and DHCP server is available
-- **SSH not accessible**: Check Dropbear configuration and authorized_keys permissions
-- **kexec fails**: Ensure full Alpine kernel and DTB are present at `/boot/alpine/`
+```bash
+stat -c '%s' /mnt/stick/rescue.root.sata.cpio.gz_pad.img
+# must print exactly: 4194304
+```
+
+Too short reads garbage; too large gets truncated and the tail of the cpio
+archive is lost.
+
+**Cause 4 — wrong filesystem or partition table.** The stick must be FAT32 with
+an MBR and a single partition. exFAT and NTFS are not supported here. (An ext4
+stick is sometimes listed in older notes; treat that as **unverified** unless
+you have tested it on your own unit.)
+
+**Cause 5 — reset button not held.** Hold reset while applying power, not after.
+Alternatively, if the box has no factory partition, U-Boot takes the USB path on
+its own.
+
+**Cause 6 — `sata.uImage` was gzipped or wrapped.** It must be a raw ARM64
+`Image` plus zero padding, not an `mkimage`/FIT container and not compressed.
+
+---
+
+## Kernel panic or early hang
+
+**Symptoms:** U-Boot loads the files fine, then nothing, or a panic on serial.
+
+**Check the header patch first.** The first bytes of `sata.uImage` must decode as:
+
+```text
+code0       = 0x91005A4D   (offset 0)
+text_offset = 0x200000     (offset 8)
+pe_offset   = 0x40         (offset 60)
+```
+
+Verify on a host:
+
+```bash
+python3 - <<'EOF'
+import struct
+d = open('sata.uImage','rb').read(64)
+print('code0       = 0x%08X' % struct.unpack_from('<I', d, 0)[0])
+print('text_offset = 0x%08X' % struct.unpack_from('<Q', d, 8)[0])
+print('pe_offset   = 0x%08X' % struct.unpack_from('<Q', d, 60)[0])
+EOF
+```
+
+All three must match the values above. A `text_offset` of 0 means the header
+was never patched, or was patched twice from an already-patched copy.
+
+**Check the padding.** The trailing 512 KiB must be all zero:
+
+```bash
+tail -c 524288 /mnt/stick/sata.uImage | tr -d '\0' | wc -c
+# must print 0
+```
+
+**Check memory in the boot log.** The DTB declares 1 GiB at `0x40000000`. If
+`dmesg` reports a different total, the DTB is wrong or not being loaded — a
+mismatched DTB can also panic at a random later address rather than failing
+early.
+
+**Check the initramfs is intact**, not just present:
+
+```bash
+gzip -t /mnt/stick/rescue.root.sata.cpio.gz_pad.img && echo "gzip stream OK"
+```
+
+---
+
+## No network / no DHCP lease
+
+**Symptoms:** the rescue shell comes up but there is no address on `eth0`.
+
+- **Ethernet driver:** the `r8169soc` GMAC driver is built into the kernel. This
+  project builds no kernel modules, so there is nothing to `insmod` — if the
+  interface is missing, it is a kernel/DTB problem, not a missing module.
+- **Link state:**
+
+  ```bash
+  ifconfig eth0
+  cat /sys/class/net/eth0/carrier        # 1 = link up
+  dmesg | grep -i -E 'r8169|stmmac|link'
+  ```
+
+- **DHCP:** confirm the lease attempt and the address in use:
+
+  ```bash
+  dmesg | grep -i dhcp
+  ifconfig eth0 | grep 'inet addr\|inet '
+  ```
+
+  If DHCP fails, the rescue init falls back to a static `192.168.1.222/24` and
+  prints a warning. Connect on that subnet directly if your LAN uses a
+  different range.
+- **Cable and switch port:** a dead link will not get a lease. Check the LEDs.
+
+---
+
+## SSH refused or rejecting the key
+
+**Symptoms:** connection refused, timeout, or `Permission denied (publickey)`.
+
+```bash
+ss -ltn 2>/dev/null | grep :22 || netstat -ltn | grep :22
+ps | grep dropbear
+```
+
+- **Connection refused** — dropbear is not running. Check the rescue init output
+  on serial, and confirm `/usr/sbin/dropbear` exists in the initramfs.
+- **Permission denied (publickey)** — the key is baked in at build time from
+  `WDMCH_SSH_AUTHORIZED_KEY`. Confirm the same public key you supplied is in
+  `~/.ssh/authorized_keys` on your client machine (it must be the `.pub`).
+- **Password auth will never work.** There is no root password by design; dropbear
+  runs public-key only on port 22.
+- **Timeout** — you have the wrong address. See the network section above.
+
+---
+
+## Reading the disk from a rescue shell
+
+```bash
+cat /proc/partitions
+```
+
+You should see the factory GPT's 24 partitions. Use it to confirm:
+
+- p1 (`sda1`) is `FW_TABLE` — back it up before any flashing work:
+  `dd if=/dev/sda1 of=fw-table-backup.bin bs=512`
+- p20 (`sda20`) is `SYSTEM_B` — this is the partition the installer writes, and
+  it carries the ext4 label `wdmch-root` after installation.
+
+```bash
+dmesg | tail -50
+```
+
+`dmesg` is the fastest way to see whether the SATA link came up, whether the
+disk was enumerated, and where a boot actually stopped. If the box stops before
+`/proc/partitions` shows anything, the kernel or DTB is the problem, not the
+initramfs.
+
+---
+
+## kexec failures
+
+Relevant only when using the no-stick path from the installed system.
+
+```bash
+/usr/local/sbin/boot-full-alpine    # prepare the kexec entry
+kexec -e                            # reboot into it
+```
+
+- **`kexec -e` reports no entry** — `boot-full-alpine` did not run, or it failed.
+  Check that the kernel and DTB are present in the installed system's on-disk
+  `/boot` directory.
+- **Loops back into rescue / reboots into nothing** — the kexec entry points at
+  a kernel the box cannot start. Re-run `boot-full-alpine` and re-check the
+  paths it reports before executing `kexec -e`.
+- **"kexec failed or need reboot"** — usually a kernel/initrd mismatch rather
+  than a genuine failure; it succeeds on the reboot.
+- The kexec path is **optional**. If it does not work, the stick-based rescue
+  boot remains the reliable route.
+
+---
+
+## Getting back to a rescue shell
+
+If the box boots into a broken installed system instead of the rescue
+environment, you have not lost the device:
+
+1. Power off.
+2. Insert the known-good FAT32 stick.
+3. Hold the reset button while powering on.
+4. If the rescue init still switches into the installed system, add an empty
+   file named `norescue` to the **root** of the stick and retry.
+5. You now have a shell over SSH or serial, and can fix the installed system.
+
+Nothing in the rescue path requires the box to be bootable from its own disk —
+that is precisely why the stick path exists.

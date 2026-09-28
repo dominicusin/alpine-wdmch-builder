@@ -35,27 +35,60 @@ jobs:
         run: |
           python3 -c "
           cfg = open('config/kernel.config').read()
+          # The rescue image builds NO kernel modules: every driver it needs
+          # is built in, because nothing can modprobe before /init runs. The
+          # storage/network/filesystem symbols are therefore load-bearing and
+          # must stay '=y'.
           required = [
               'CONFIG_AHCI_RTD1295',
               'CONFIG_R8169SOC',
               'CONFIG_PHY_RTK_RTD_SATAPHY',
               'CONFIG_USB_STORAGE',
+              'CONFIG_USB_DWC3',
+              'CONFIG_EXT4_FS',
+              'CONFIG_VFAT_FS',
               'CONFIG_INET',
+              # without BINFMT_SCRIPT the kernel panics 'Failed to execute
+              # /init (error -8)' - /init is a shell script
               'CONFIG_BINFMT_SCRIPT',
+              # without AF_PACKET udhcpc cannot send DHCPDISCOVER at all
               'CONFIG_PACKET',
               'CONFIG_BLK_DEV_INITRD',
+              'CONFIG_RD_GZIP',
               'CONFIG_SERIAL_8250_CONSOLE',
+              'CONFIG_KEXEC',
           ]
           missing = [k for k in required if k not in cfg]
           assert not missing, f'Missing kernel config: {missing}'
+          # Anything load-bearing must be built in, not modular.
+          modular = [k for k in required if k + '=m' in cfg]
+          assert not modular, f'Rescue-critical symbols must be =y, not =m: {modular}'
           print('Kernel config spec OK')
           "
 
-      - name: Validate USB tree layout
+      - name: Assert the source pin is a real commit
         run: |
-          for f in boot/sata.uImage boot/rtd1295-wd-mycloud-home.dtb boot/initramfs.cfg; do
-              test -f "$f" && echo "  OK: $f" || echo "  (not present yet: $f)"
-          done
+          # A floating KERNEL_REF makes every build unreproducible.
+          ref=$(grep -m1 '^KERNEL_REF=' config/source-lock.env | cut -d= -f2)
+          echo "KERNEL_REF=$ref"
+          if [ "$ref" = "HEAD" ] || [ "$ref" = "main" ] || [ -z "$ref" ]; then
+            echo "FAIL: KERNEL_REF is a floating reference" >&2
+            exit 1
+          fi
+          echo "$ref" | grep -Eq '^[0-9a-f]{7,40}$' || {
+            echo "FAIL: KERNEL_REF is not a commit SHA" >&2; exit 1; }
+
+      - name: Reject the old /boot/ USB layout
+        run: |
+          # The vendor loader reads fixed filenames from the ROOT of the FAT
+          # stick. Any doc still telling users to create boot/ on the stick
+          # produces a stick that cannot boot - fail the build instead.
+          if grep -rnE 'boot/(sata\.uImage|rescue\.sata\.dtb|rescue\.root)' \
+               docs/ README.md .github/ 2>/dev/null; then
+            echo "FAIL: documentation still references a boot/ subdirectory on the USB stick" >&2
+            exit 1
+          fi
+          echo "USB layout references OK (root-level only)"
 
       - name: Run repo layout test
         run: |
