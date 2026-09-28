@@ -1,175 +1,130 @@
 #!/usr/bin/env bash
-# Automate WDMCH rescue image releases.
+# Release helper for the WDMCH rescue image.
+#
+# The GitHub Actions workflow (.github/workflows/release.yml) owns the actual
+# build and publication: push a v* tag and it builds the image and creates the
+# release. This script does NOT rebuild or publish anything itself - it
+# validates, creates the tag, watches CI, and then verifies the release really
+# appeared. Running a local build here would only duplicate what CI does, and
+# publishing here would race the workflow.
 #
 # Usage:
-#   ./scripts/release.sh            # Create a new release from current commit
-#   ./scripts/release.sh --dry-run  # Validate build + tests without publishing
-#   ./scripts/release.sh --tag v1.0 # Use a specific tag
+#   ./scripts/release.sh              # validate, tag as v<VERSION>, push, watch
+#   ./scripts/release.sh --dry-run    # validate only, change nothing
+#   ./scripts/release.sh --tag v1.2.3 # override the tag (must match VERSION)
 #
-# Requirements:
-#   - gh CLI authenticated (gh auth login)
-#   - GITHUB_TOKEN or GH_TOKEN env var with repo write access
-#   - Working tree must be clean
-#   - WDMCH_SSH_AUTHORIZED_KEY must be set as a GitHub secret
-set -euo pipefail
+# The tag MUST be v<VERSION> exactly. release.yml names the release from the
+# VERSION *file*, not from the triggering tag, so tagging "v3.21.8-3-46"
+# would publish the new artifacts under a name that differs from the tag.
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJ_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJ_DIR"
 
+REPO=dominicusin/alpine-wdmch-builder
 TAG=""
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
-        --tag*)     TAG="${1#--tag}"; shift ;;
-        -h|--help)
-            sed -n '2,20p' "$0"
-            exit 0
-            ;;
+        --tag)     TAG="${2:-}"; shift 2 ;;
+        --tag=*)   TAG="${1#--tag=}"; shift ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
 
-# ---- validate preconditions --------------------------------------------
-echo "=== Release preconditions ==="
+say()  { printf '\n=== %s ===\n' "$*"; }
+die()  { echo "ERROR: $*" >&2; exit 1; }
 
-if ! gh auth status >/dev/null 2>&1; then
-    echo "ERROR: gh CLI not authenticated. Run 'gh auth login'." >&2
-    exit 1
-fi
+VERSION=$(cat VERSION 2>/dev/null || true)
+[ -n "$VERSION" ] || die "VERSION file is empty or missing"
+[ -n "$TAG" ] || TAG="v${VERSION}"
 
-if [ -z "$(git status --porcelain)" ]; then
-    echo "Working tree clean: OK"
-else
-    echo "ERROR: Working tree not clean. Commit or stash changes first." >&2
-    git status --short >&2
-    exit 1
-fi
+# ---- preconditions --------------------------------------------------------
+say "Preconditions"
 
-if [ -z "$TAG" ]; then
-    # Derive tag from VERSION file or commit count
-    VERSION=$(cat VERSION 2>/dev/null || echo "0.1.0-dev")
-    COMMITS=$(git rev-list --count HEAD 2>/dev/null || echo "0")
-    TAG="v${VERSION}-${COMMITS}"
-    echo "Derived tag: $TAG"
-fi
+command -v gh >/dev/null 2>&1 || die "gh CLI not found"
+gh auth status >/dev/null 2>&1 || die "gh CLI not authenticated (run: gh auth login)"
 
-# Check if tag already exists
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-    echo "Tag $TAG already exists. Using --force to overwrite."
-fi
+[ -z "$(git status --porcelain)" ] || { git status --short >&2; die "working tree is not clean"; }
+echo "  working tree clean: OK"
 
-# ---- verify SSH key secret exists ----------------------------------------
-echo ""
-echo "=== Checking secrets ==="
-if gh secret list 2>/dev/null | grep -q 'WDMCH_SSH_AUTHORIZED_KEY'; then
-    echo "WDMCH_SSH_AUTHORIZED_KEY secret: found"
-else
-    echo "ERROR: WDMCH_SSH_AUTHORIZED_KEY secret not set." >&2
-    echo "Run: gh secret set WDMCH_SSH_AUTHORIZED_KEY < ~/.ssh/id_ed25519.pub" >&2
-    exit 1
-fi
+git fetch --quiet origin || die "git fetch failed"
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse origin/main 2>/dev/null || echo "")
+[ "$LOCAL" = "$REMOTE" ] || die "HEAD ($LOCAL) is not origin/main ($REMOTE) - push first"
+echo "  HEAD matches origin/main: OK"
 
-# ---- build the image -----------------------------------------------------
-echo ""
-echo "=== Building WDMCH rescue image ==="
-echo "This will take ~30 minutes (kernel cross-compilation)."
+echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' \
+    || die "tag '$TAG' is not of the form v<major>.<minor>.<patch>[-<n>]"
+[ "$TAG" = "v${VERSION}" ] || die "tag '$TAG' does not match VERSION ($VERSION); release.yml names the release from the VERSION file, so a mismatch publishes under a different name than the tag"
+echo "  tag $TAG matches VERSION: OK"
+
+# ---- local gates ----------------------------------------------------------
+# Same gates CI runs. Catching a failure here costs seconds rather than a
+# ~30 minute CI cycle.
+say "Local gates"
+make test || die "make test failed - not tagging"
+bash tools/release-audit.sh || die "release-audit.sh failed - not tagging"
+echo "  local gates: OK"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-    echo "DRY RUN: skipping full build, validating configuration only."
-    ./build-image.sh --help
-    ./build-image.sh --dry-run
-else
-    ./build-image.sh --clean
-    ./build-image.sh
-fi
-
-# ---- verify artifacts ----------------------------------------------------
-echo ""
-echo "=== Verifying artifacts ==="
-
-# Check kernel header
-python3 -c "
-import struct
-d = open('build/kernel/Image','rb').read(32)
-code0 = struct.unpack('<I', d[0:4])[0]
-text_off = struct.unpack('<I', d[8:12])[0]
-assert code0 == 0x91005A4D, f'code0 mismatch: 0x{code0:08x}'
-assert text_off == 0x200000, f'text_offset mismatch: 0x{text_off:08x}'
-print(f'Kernel header OK: code0=0x{code0:08x} text_offset=0x{text_off:08x}')
-"
-
-# Check initramfs size
-IMGSZ=$(stat -c%s build/kernel/rescue.root.sata.cpio.gz_pad.img)
-[ "$IMGSZ" -eq 4194304 ] || { echo "ERROR: initramfs size $IMGSZ != 4194304"; exit 1; }
-echo "Initramfs: 4 MiB OK ($IMGSZ bytes)"
-
-# Check DTB
-python3 -c "
-d = open('build/kernel/rtd1295-wd-mycloud-home.dtb','rb').read(4)
-magic = int.from_bytes(d,'big')
-assert magic == 0xd00dfeed, f'FDT magic mismatch: 0x{magic:08x}'
-print('DTB magic OK')
-"
-
-# Check flash.zip has packages
-APK_COUNT=$(unzip -l build/flash.zip | grep -c '\.apk$' || true)
-[ "$APK_COUNT" -ge 20 ] || { echo "ERROR: only $APK_COUNT APK packages in flash.zip (need >= 20)"; exit 1; }
-echo "Flash.zip has $APK_COUNT APK packages: OK"
-
-echo ""
-echo "All artifact checks passed."
-
-# ---- create the release --------------------------------------------------
-echo ""
-echo "=== Creating release $TAG ==="
-
-if [ "$DRY_RUN" -eq 1 ]; then
-    echo "DRY RUN: would create release $TAG with:"
-    echo "  - alpine-wdmch-rescue-*-flash.zip"
-    echo "  - SHA256SUMS"
-    echo "  - manifest.json"
-    echo ""
-    echo "Release created successfully (dry run)."
+    say "Dry run"
+    echo "Would create and push tag $TAG, then wait for the Release workflow."
+    echo "Nothing was changed."
     exit 0
 fi
 
-# Create the tag on the remote
-if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-    git tag -a "$TAG" -m "WDMCH Rescue Image $TAG
+# ---- tag ------------------------------------------------------------------
+say "Tagging $TAG"
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+    TAG_SHA=$(git rev-list -n1 "$TAG")
+    [ "$TAG_SHA" = "$LOCAL" ] \
+        || die "tag $TAG already exists at a different commit ($TAG_SHA) - resolve it by hand"
+    echo "  tag already points at HEAD, reusing it"
+else
+    git tag -a "$TAG" -m "WDMCH rescue image $TAG
 
-Automated release created by scripts/release.sh"
+Installs into p20 SYSTEM_B on the factory GPT and hands over with switch_root."
     git push origin "$TAG"
-    echo "Tag $TAG pushed to remote."
+    echo "  tag pushed"
 fi
 
-# Wait for the CI workflow triggered by the tag to complete
-echo "Waiting for CI build to complete..."
-RUN_ID=$(gh api repos/dominicusin/alpine-wdmch-builder/actions/runs --jq ".workflow_runs[] | select(.head_ref==\"$TAG\" or .head_branch==\"$TAG\") | .id" 2>/dev/null | head -1)
-
-if [ -z "$RUN_ID" ]; then
-    # Fallback: find the most recent run on the tag
+# ---- watch CI -------------------------------------------------------------
+say "Waiting for the Release workflow"
+sleep 20
+RUN_ID=""
+for _ in $(seq 1 30); do
+    RUN_ID=$(gh run list --workflow=Release --limit 20 --json headBranch,databaseId \
+               --jq "[.[] | select(.headBranch==\"$TAG\")] | first | .databaseId // empty" 2>/dev/null || true)
+    [ -n "$RUN_ID" ] && break
     sleep 10
-    RUN_ID=$(gh api repos/dominicusin/alpine-wdmch-builder/actions/runs --jq ".workflow_runs[] | select(.head_ref==\"$TAG\") | .id" 2>/dev/null | head -1)
-fi
+done
+[ -n "$RUN_ID" ] || die "could not find the Release workflow run for $TAG - see https://github.com/$REPO/actions"
 
-if [ -n "$RUN_ID" ]; then
-    gh run watch "$RUN_ID" --exit-status --interval 60 2>/dev/null || true
-fi
+echo "  run $RUN_ID - this cross-compiles the kernel, expect ~30 minutes"
+gh run watch "$RUN_ID" --interval 60
 
-# Create the release with gh CLI
-VERSION=$(cat VERSION 2>/dev/null || echo "0.1.0-dev")
-gh release create "$TAG" \
-    --title "WDMCH Rescue Image $VERSION" \
-    --repo dominicusin/alpine-wdmch-builder \
-    --generate-notes \
-    --force \
-    "alpine-wdmch-rescue-${VERSION}-flash.zip" \
-    "SHA256SUMS" \
-    "manifest.json"
+# Do NOT swallow this. A failed build followed by a published release is
+# exactly the class of bug this script exists to prevent.
+CONCLUSION=$(gh run view "$RUN_ID" --json conclusion -q .conclusion)
+[ "$CONCLUSION" = "success" ] || {
+    gh run view "$RUN_ID" --log-failed || true
+    die "Release workflow concluded '$CONCLUSION' - no release was created"
+}
 
-echo ""
-echo "=== Release $TAG created successfully ==="
-echo "Download: https://github.com/dominicusin/alpine-wdmch-builder/releases/tag/$TAG"
+# ---- verify the release actually exists -----------------------------------
+say "Verifying the published release"
+gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
+    || die "CI succeeded but no release $TAG exists - check the workflow's publish step"
+
+for a in "alpine-wdmch-rescue-${VERSION}-flash.zip" SHA256SUMS manifest.json; do
+    gh release view "$TAG" --repo "$REPO" --json assets --jq ".assets[] | select(.name==\"$a\") | .name" \
+        | grep -q . || die "release is missing the asset $a"
+    echo "  asset OK: $a"
+done
+
+printf '\nRelease %s published: https://github.com/%s/releases/tag/%s\n' "$TAG" "$REPO" "$TAG"
