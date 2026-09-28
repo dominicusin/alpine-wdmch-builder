@@ -93,6 +93,29 @@ jobs:
           fi
           echo "kernel pin is only read, never written: OK"
 
+      - name: Reject flags gh does not support
+        run: |
+          # `gh release create` has no --force; passing it aborts the whole
+          # release AFTER a successful ~30 minute kernel build. Catch the
+          # typo class here instead.
+          if grep -rnE 'gh release (create|edit|upload)[^|;&]*--force' .github/ scripts/ 2>/dev/null \
+             | grep -vE ':[[:space:]]*#'; then
+            echo "FAIL: --force is not a valid flag for gh release create/edit/upload" >&2
+            exit 1
+          fi
+          # Every flag used against `gh release` must exist in this gh.
+          gh release create --help >/dev/null 2>&1 || {
+            echo "FAIL: cannot query gh release flags" >&2; exit 1; }
+          for f in --verify-tag --generate-notes --title --repo; do
+            gh release create --help 2>&1 | grep -q -- "$f" || {
+              echo "FAIL: gh release create does not support $f" >&2; exit 1; }
+          done
+          for f in --yes --repo; do
+            gh release delete --help 2>&1 | grep -q -- "$f" || {
+              echo "FAIL: gh release delete does not support $f" >&2; exit 1; }
+          done
+          echo "gh release flags verified against the installed CLI: OK"
+
       - name: Reject the old /boot/ USB layout
         run: |
           # The vendor loader reads fixed filenames from the ROOT of the FAT
