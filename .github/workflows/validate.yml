@@ -28,7 +28,7 @@ jobs:
 
       - name: Validate Python scripts (syntax only)
         run: |
-          python3 -m py_compile tools/check-image-header.py tools/check-fdt.py tools/resolve-apk-closure.py
+          python3 -m py_compile tools/check-image-header.py tools/check-fdt.py image/resolve-deps.py
           echo "Python syntax OK"
 
       - name: Validate kernel config against spec
@@ -127,6 +127,40 @@ jobs:
             exit 1
           fi
           echo "USB layout references OK (root-level only)"
+
+      - name: Reject a partial test list in the release/build workflows
+        run: |
+          # release.yml's step is called "Run all tests" but used to invoke
+          # three scripts by hand, so test_rootfs, test_install_verify,
+          # test_image, test_dtb and test_kernel_metadata never ran in CI -
+          # their guards existed only on the maintainer's machine. Naming
+          # individual scripts in the publishing workflows re-introduces
+          # that; `make test` is the single source of truth.
+          #
+          # Scoped to release.yml and build.yml on purpose: this file runs
+          # test_repo_layout.sh and test_tools.sh directly because they need
+          # no build artifacts and must also gate a bare pull request.
+          if grep -rnE '^\s+bash tests/test_[a-z_]+\.sh' \
+               .github/workflows/release.yml .github/workflows/build.yml 2>/dev/null; then
+            echo "FAIL: a workflow runs individual test scripts instead of 'make test':" >&2
+            exit 1
+          fi
+          # make test must actually be invoked, or the gate is vacuous.
+          if ! grep -qE '^\s+make test\s*$' .github/workflows/release.yml; then
+            echo "FAIL: release.yml does not run 'make test'" >&2
+            exit 1
+          fi
+          echo "release and build workflows run the full suite via make test: OK"
+
+      - name: Reject hardcoded absolute home paths
+        run: |
+          # A committed script carrying one developer's home directory is
+          # broken for everyone else and for CI. Repo-relative paths only.
+          if git grep -nE '/home/[a-z0-9_.-]+/' -- . ':!docs' 2>/dev/null; then
+            echo "FAIL: a tracked file hardcodes an absolute /home/<user> path" >&2
+            exit 1
+          fi
+          echo "no hardcoded home paths: OK"
 
       - name: Run repo layout test
         run: |

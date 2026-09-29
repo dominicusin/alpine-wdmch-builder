@@ -78,10 +78,14 @@ jobs:
 
       - name: Run all tests
         run: |
-          echo "=== test_tools.sh ==="
-          bash tests/test_tools.sh
-          echo "=== test_workflows.sh ==="
-          bash tests/test_workflows.sh
+          # `make test` is the single source of truth for the suite: it runs
+          # `validate` (image header, FDT, artifacts, test_tools) plus all
+          # seven test scripts. Hand-picking three of them here meant
+          # test_rootfs, test_install_verify, test_image, test_dtb and
+          # test_kernel_metadata never ran in CI at all, so their guards
+          # existed only on this machine.
+          echo "=== make test ==="
+          make test
           echo "=== qemu/smoke.sh ==="
           bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
 
@@ -200,9 +204,9 @@ jobs:
 
       - name: Run tests
         run: |
-          echo "=== test_tools.sh ==="
-          bash tests/test_tools.sh
-          echo "=== test_workflows.sh ==="
-          bash tests/test_workflows.sh
+          # Same suite as the release job, for the same reason: a partial
+          # list means a guard that only ever runs on one machine.
+          echo "=== make test ==="
+          make test
           echo "=== qemu/smoke.sh ==="
           bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
