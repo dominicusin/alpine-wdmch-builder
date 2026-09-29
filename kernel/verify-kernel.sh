@@ -33,19 +33,10 @@ assert magic == 0x644D5241, f'Bad ARM64 magic: 0x{magic:08X}'
 print(f'ARM64 Image magic verified: 0x{magic:08X}')
 PY
 
-# Validate the PATCHED Image header (monarch contract)
-python3 - "$IMAGE" <<'PY'
-import struct, sys
-p = sys.argv[1]
-b = open(p, 'rb').read(64)
-code0 = struct.unpack_from('<I', b, 0)[0]
-text_offset = struct.unpack_from('<Q', b, 8)[0]
-pe_offset = struct.unpack_from('<I', b, 60)[0]
-assert code0 == 0x91005A4D, f'code0 not patched: 0x{code0:08X}'
-assert text_offset == 0x200000, f'text_offset not patched: 0x{text_offset:X}'
-assert pe_offset == 0x40, f'pe_offset not patched: 0x{pe_offset:X}'
-print(f'Patched Image header verified: code0=0x{code0:08X} text_offset=0x{text_offset:X} pe_offset=0x{pe_offset:X}')
-PY
+# Validate the PATCHED Image header against the upstream monarch contract.
+# tools/check-image-header.py is the single implementation; the inline struct
+# parse that used to live here was a second copy that could drift from it.
+python3 tools/check-image-header.py "$IMAGE"
 
 # Verify built-in drivers the rescue initramfs depends on (no modules!)
 echo "Verifying built-in rescue drivers in .config..."

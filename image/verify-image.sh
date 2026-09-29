@@ -51,14 +51,10 @@ else
     exit 1
 fi
 
-# Verify DTB FDT magic
-python3 -c "
-import struct
-b = open('$RELEASE_DIR/rescue.sata.dtb', 'rb').read()
-magic = struct.unpack_from('>I', b, 0)[0]
-assert magic == 0xd00dfeed, f'Bad FDT magic: 0x{magic:08X}'
-print('DTB FDT magic verified')
-"
+# Verify the shipped DTB. tools/check-fdt.py is the single implementation -
+# an inline magic-only parse here would be a second copy that can only ever
+# check less than the real validator.
+python3 tools/check-fdt.py "$RELEASE_DIR/rescue.sata.dtb"
 
 # Verify no private key material
 if grep -rq 'BEGIN PRIVATE KEY\|BEGIN RSA PRIVATE KEY\|BEGIN OPENSSH PRIVATE KEY' "$RELEASE_DIR/" 2>/dev/null; then

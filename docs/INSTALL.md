@@ -105,8 +105,15 @@ bash kernel/verify-kernel.sh
 
 ```bash
 bash dtb/build-dtb.sh
-bash dtb/verify-dtb.sh
+bash tests/test_dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb \
+                        build/kernel/rtd1295-wd-mycloud-home.dts
 ```
+
+`tests/test_dtb.sh` is the single DTB check — it validates the shipping
+binary through `tools/check-fdt.py` and only inspects the decompiled `.dts`
+at value level. An earlier `dtb/verify-dtb.sh` duplicated it with an exact
+`grep -q 'compatible = "wd,mycloud-home"'`, which passed with one `dtc` build
+and failed with another on a byte-identical, correct blob.
 
 ### Rootfs Build
 

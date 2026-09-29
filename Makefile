@@ -35,7 +35,7 @@ kernel:
 
 dtb:
 	bash dtb/build-dtb.sh
-	bash dtb/verify-dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb build/kernel/rtd1295-wd-mycloud-home.dts
+	bash tests/test_dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb build/kernel/rtd1295-wd-mycloud-home.dts
 
 rootfs:
 	bash rootfs/build-rootfs.sh build/rootfs $$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none)
