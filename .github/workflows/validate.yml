@@ -195,6 +195,40 @@ jobs:
           fi
           echo "header checks are single-sourced in tools/: OK"
 
+      - name: Reject a test that can pass without testing anything
+        run: |
+          # A check that skips and reports success is worse than no check: it
+          # turns a broken environment or a broken tool into a green run.
+          # Three existed here - the flash.zip closure guard skipped when the
+          # resolver failed, and the QEMU smoke test skipped without qemu and
+          # only warned (never failed) when BusyBox would not run.
+          #
+          # Both shapes are caught. The skip language sits on the line ABOVE
+          # `exit 0`, so the window is scanned per file rather than per line.
+          # The second shape is a failure branch that only prints a warning:
+          # `|| echo "WARNING: ..."` on a command whose failure matters.
+          bad=""
+          for f in $(git ls-files 'tests/*.sh' 'tools/*.sh' test-flash.sh); do
+            [ -f "$f" ] || continue
+            hit=$(awk '
+              /skip|not found|unavailable|could not/ { sk = NR }
+              /^[[:space:]]*exit 0/ {
+                if (sk && NR - sk <= 2) { print FILENAME ":" NR }
+              }
+              /\|\|[[:space:]]*echo/ && /WARNING|skip|could not/ {
+                print FILENAME ":" NR
+              }
+            ' "$f")
+            [ -n "$hit" ] && bad="$bad$hit"$'\n'
+          done
+          if [ -n "$bad" ]; then
+            echo "FAIL: these checks can report success without testing:" >&2
+            echo "$bad" >&2
+            echo "Exit non-zero instead - an unrun check is not a passing check." >&2
+            exit 1
+          fi
+          echo "no check reports success without testing something: OK"
+
       - name: Run repo layout test
         run: |
           bash tests/test_repo_layout.sh

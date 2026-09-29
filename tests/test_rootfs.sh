@@ -32,17 +32,23 @@ repo = sys.argv[1]
 idx = os.path.join(repo, "build/usb-tree-root/apks")
 main_i = os.path.join(idx, "main/APKINDEX.tar.gz")
 comm_i = os.path.join(idx, "community/APKINDEX.tar.gz")
+# Both of these are hard failures, not skips. This guard exists to catch a
+# package that reached flash.zip without being in the closure; if the
+# resolver is broken or the offline repo was never built, the check cannot
+# run and reporting success would hide exactly the bug it was written for.
 if not (os.path.exists(main_i) and os.path.exists(comm_i)):
-    print("  skipped: offline indexes not built")
-    sys.exit(0)
+    print(f"  FAIL: offline APKINDEX missing under {idx}")
+    print("        the closure check cannot run; run `make package` first")
+    sys.exit(1)
 seeds = ["alpine-base", "openrc-init", "ifupdown-ng", "dropbear",
          "e2fsprogs", "kexec-tools"]
 out = subprocess.run([sys.executable, os.path.join(repo, "image/resolve-deps.py"),
                       "--tsv", "--main", main_i, "--community", comm_i] + seeds,
                      capture_output=True, text=True, cwd=repo)
 if out.returncode != 0:
-    print("  skipped: resolver did not run cleanly")
-    sys.exit(0)
+    print(f"  FAIL: image/resolve-deps.py exited {out.returncode}")
+    sys.stderr.write(out.stderr)
+    sys.exit(1)
 want = {l.split("\t")[3].split("/")[-1] for l in out.stdout.splitlines() if l.count("\t") >= 3}
 with zipfile.ZipFile(os.path.join(repo, "build/flash.zip")) as z:
     have = {n.split("/")[-1] for n in z.namelist() if n.endswith(".apk")}

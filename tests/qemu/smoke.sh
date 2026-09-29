@@ -10,10 +10,13 @@ KERNEL_RELEASE="$2"
 
 echo "=== QEMU aarch64 rescue rootfs smoke test ==="
 
-# Check if qemu-aarch64-static is available
+# The whole point of this test is to execute aarch64 code under emulation.
+# If the emulator is missing, the test has not passed - it has not run. CI
+# installs qemu-user-static, so a missing emulator there is a broken
+# environment, not a reason to report green.
 if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
-    echo "WARNING: qemu-aarch64-static not found, skipping QEMU test"
-    exit 0
+    echo "FAIL: qemu-aarch64-static not found - the smoke test cannot run" >&2
+    exit 1
 fi
 
 # Prepare a test directory with the rootfs
@@ -75,9 +78,18 @@ else
     echo "WARNING: No modules dir (rescue uses built-in drivers only)"
 fi
 
-# Try running a basic command inside QEMU if possible
+# The one substantive assertion in this file. BusyBox is statically linked
+# for aarch64 and must execute under emulation - that is what proves the
+# rescue userspace is a working binary rather than a set of plausible files.
+# It used to print a WARNING and let the test pass, so the test could not
+# fail on the very thing it exists to check.
 echo "Attempting QEMU userspace test..."
-qemu-aarch64-static "$TEST_DIR/rootfs/bin/busybox" --help >/dev/null 2>&1 && echo "OK: BusyBox runs in QEMU" || echo "WARNING: Could not run BusyBox in QEMU"
+if ! qemu-aarch64-static "$TEST_DIR/rootfs/bin/busybox" --help >/dev/null 2>&1; then
+    echo "FAIL: the aarch64 BusyBox did not run under QEMU" >&2
+    qemu-aarch64-static "$TEST_DIR/rootfs/bin/busybox" --help 2>&1 | head -3 >&2 || true
+    exit 1
+fi
+echo "OK: BusyBox runs in QEMU"
 
 rm -rf "$TEST_DIR"
 echo "QEMU smoke test PASSED"
