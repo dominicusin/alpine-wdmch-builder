@@ -162,6 +162,39 @@ jobs:
           fi
           echo "no hardcoded home paths: OK"
 
+      - name: Reject a second hand-written copy of a header check
+        run: |
+          # Four separate bugs in this repo came from re-implementing a check
+          # that already existed in tools/: an exact grep against a decompiled
+          # dtc rendering, and three struct parses with the wrong width
+          # (pe_offset as <Q, text_offset as <I). A copy has no mechanism to
+          # stay in sync, so the check must be the tool, not a literal.
+          #
+          # tools/check-image-header.py and tools/check-fdt.py are the single
+          # implementations. Two things stay legal because the tools do not
+          # read those fields: the UNPATCHED image's ARM64 magic at offset 56
+          # (kernel/verify-kernel.sh, tests/test_kernel_metadata.sh) and the
+          # structural FDT magic/totalsize in tests/test_dtb.sh.
+          #
+          # This file is excluded so the guard cannot match its own pattern,
+          # and comment lines are dropped: documenting the contract is not
+          # re-implementing it.
+          bad=$(grep -rnE "unpack_from|0xd00dfeed|0x644D5241|0x91005A4D" \
+                  --include='*.sh' --include='*.yml' . \
+                  --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
+                | grep -v '^\./\.github/workflows/validate\.yml' \
+                | grep -vE '^\S+:[0-9]+:[[:space:]]*(#|//)' \
+                | grep -vE 'tools/check-image-header\.py|tools/check-fdt\.py' \
+                | grep -vE "unpack_from\('<I', b, 56\)|Bad ARM64 magic" \
+                | grep -vE '^\./tests/test_dtb\.sh:' || true)
+          if [ -n "$bad" ]; then
+            echo "FAIL: a file re-implements a header check that tools/ already owns." >&2
+            echo "Call tools/check-image-header.py or tools/check-fdt.py instead." >&2
+            echo "$bad" >&2
+            exit 1
+          fi
+          echo "header checks are single-sourced in tools/: OK"
+
       - name: Run repo layout test
         run: |
           bash tests/test_repo_layout.sh

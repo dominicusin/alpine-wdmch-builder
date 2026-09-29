@@ -96,13 +96,10 @@ jobs:
           echo "=== Image ==="
           file build/kernel/Image
           echo "=== DTB ==="
-          python3 -c "
-          d=open('build/kernel/rtd1295-wd-mycloud-home.dtb','rb').read(4)
-          magic=int.from_bytes(d,'big')
-          print(f'  FDT magic: 0x{magic:08x}')
-          assert magic==0xd00dfeed, f'FDT magic mismatch: 0x{magic:08x}'
-          print('  PASS')
-          "
+          # The full validator, not an inline magic read: this is the first
+          # point in the pipeline where the blob exists, so it is the cheapest
+          # place to catch a wrong board before anything is packaged.
+          python3 tools/check-fdt.py build/kernel/rtd1295-wd-mycloud-home.dtb
           echo "=== kernel-release.txt ==="
           cat build/kernel/kernel-release.txt
 
