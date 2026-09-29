@@ -134,28 +134,36 @@ jobs:
           bash image/package-rescue.sh
           echo ""
           echo "=== sata.uImage ==="
+          # Header fields are checked by the one correct validator; it reads
+          # text_offset as the 64-bit value the ARM64 Image header actually
+          # stores. The inline struct check that used to live here unpacked
+          # it as <I>, which only agreed with the expected 0x200000 by
+          # accident of it fitting in 32 bits.
+          python3 tools/check-image-header.py build/release/sata.uImage
+          # The trailing 512 KiB of zero padding is not a header field, so
+          # it is still checked here.
           python3 -c "
-          import struct, os
-          d=open('build/release/sata.uImage','rb').read(32)
-          code0=struct.unpack('<I',d[0:4])[0]
-          text_off=struct.unpack('<I',d[8:12])[0]
-          sz=os.path.getsize('build/release/sata.uImage')
-          print(f'  size={sz} code0=0x{code0:08x} text_offset=0x{text_off:08x}')
-          assert code0==0x91005A4D
-          assert text_off==0x200000
-          # padding check: last 512 KiB must be zero
+          import os
+          p='build/release/sata.uImage'
           pad=512*1024
-          last=open('build/release/sata.uImage','rb').read()[-pad:]
+          sz=os.path.getsize(p)
+          last=open(p,'rb').read()[-pad:]
           nulls=sum(1 for b in last if b==0)
+          print(f'  size={sz}')
           print(f'  padding: {nulls}/{pad} zero bytes ({100*nulls/pad:.1f}%)')
           assert nulls==pad, 'padding not zero'
-          print('  PASS')
+          print('  padding PASS')
           "
 
       - name: Run validation tests
         env:
           WDMCH_SSH_AUTHORIZED_KEY: ${{ secrets.WDMCH_SSH_AUTHORIZED_KEY }}
         run: |
+          # `make test` runs the full suite - it used to be missing here
+          # entirely, so a pull request could merge with every test script
+          # failing and this step would still report success.
+          echo "=== make test ==="
+          make test
           echo "=== test-flash.sh ==="
           bash test-flash.sh
 
