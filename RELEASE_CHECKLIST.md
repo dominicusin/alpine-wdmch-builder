@@ -14,6 +14,13 @@
 - [ ] Kernel builds from pinned source
 - [ ] `rtd1295-wd-mycloud-home.dtb` is generated and validated
 - [ ] Image header has `code0=0x91005A4D`, `text_offset=0x200000`, `pe_offset=0x40`
+      — asserted by `tools/check-image-header.py`, the single implementation.
+      `code0`/`pe_offset` are 32-bit and only `text_offset` is 64-bit; a
+      wrong width here agrees by accident and disagrees later.
+- [ ] The DTB is validated from the **binary** via `tools/check-fdt.py`, not by
+      grepping a decompiled `.dts`. `dtc` is free to reorder or wrap a
+      multi-string property, so an exact-phrasing grep is a property of the
+      installed `dtc`, not of the board.
 - [ ] Required capabilities are enabled (SATA, Ethernet, USB, DT, kexec)
 - [ ] Every WDMCH-critical driver is `=y`, not `=m` — this image ships **zero
       kernel modules**, so anything built modular is unavailable before `/init`
@@ -53,6 +60,29 @@
 - [ ] Permissions are least-privilege
 - [ ] `WDMCH_SSH_AUTHORIZED_KEY` is used only for rootfs creation
 - [ ] `validate.yml` runs on push/PR
+
+The publishing workflows run the **whole** suite through `make test`. A step
+named "Run all tests" that lists test scripts by hand is how five of them
+stopped running in CI at all; `validate.yml` rejects that shape and requires
+`make test` to be present. The following are enforced as hard failures, each
+after a real defect it was written for:
+
+- [ ] `KERNEL_REF` is a real commit SHA, and no workflow writes it
+- [ ] No workflow passes an unsupported `gh release` flag (there is no `--force`)
+- [ ] No documentation reintroduces the `boot/` subdirectory on the stick
+- [ ] No tracked file outside `docs/` hardcodes an absolute `/home/<user>` path
+- [ ] No `.sh`/`.yml` re-implements a header check that `tools/` already owns
+- [ ] No test reports success when it could not run — a missing prerequisite
+      or a broken tool is a failure, not a skip
+
+Enforced by `tests/test_rootfs.sh`, which `make test` runs in the publishing
+workflows (it needs built artifacts, so it is not a `validate.yml` step):
+
+- [ ] `flash.zip` contains exactly the resolver closure: no orphan package,
+      and no closure package missing. Both used to be silent:
+      `dl-packages.sh` never pruned the persistent tree, and `zip -r` against
+      an existing archive only ever adds entries, so a removed package
+      survived in the artifact indefinitely.
 
 ### Documentation
 
