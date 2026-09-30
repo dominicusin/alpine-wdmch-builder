@@ -77,6 +77,26 @@ ls -l /root/wdmch-fw-table-backup.bin
 It is not the rollback — the untouched `p19 SYSTEM_A` and the preserved GPT
 are. It is a copy of the one partition the installer reads before writing.
 
+### 1.4 One thing to know about the handoff
+
+The handoff script carries a safety net: if the installed system has no
+`authorized_keys`, it copies the **rescue** key in, so you cannot lock
+yourself out of a device whose only access is SSH and a serial console.
+
+`install-alpine` now refuses to complete without a key, so this only fires if
+a key was deliberately removed after installation. When it does, the console
+says so in capitals and the rescue key becomes a **persistent credential on
+the internal disk** — it stays there even after the stick is pulled.
+
+If that is not what you want, remove it after the first boot:
+
+```bash
+rm /root/.ssh/authorized_keys
+```
+
+Then install your own key and reload dropbear. The trade is deliberate: an
+extra key is recoverable, a locked-out unit on a NAS is not.
+
 ---
 
 ## Part 2 — Restoration: size it before you start

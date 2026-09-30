@@ -96,12 +96,26 @@ fi
 
 # Carry the SSH authorized key across so the installed system stays reachable
 # even if the copy made by install-alpine went missing.
+#
+# This is a safety net, not a convenience. install-alpine now makes a missing
+# key FATAL, so a target without one means someone removed it after the fact,
+# and this undoes that. That is the right trade: losing SSH to a device whose
+# only access is SSH and a serial console is worse than an extra key being
+# present. But a key from removable media has just become a persistent
+# credential on the internal disk, so it says so plainly and says how to undo
+# it, rather than appearing as a side effect.
 if [ -f /root/.ssh/authorized_keys ] && [ ! -f "$NEWROOT/root/.ssh/authorized_keys" ]; then
     mkdir -p "$NEWROOT/root/.ssh"
-    cp /root/.ssh/authorized_keys "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null
-    chmod 700 "$NEWROOT/root/.ssh" 2>/dev/null
-    chmod 600 "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null
-    say "copied the rescue SSH key into the installed system"
+    if cp /root/.ssh/authorized_keys "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null; then
+        chmod 700 "$NEWROOT/root/.ssh" 2>/dev/null
+        chmod 600 "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null
+        say "WARNING: the installed system had NO SSH key, so the RESCUE key was"
+        say "         copied into it. The rescue key now persists on the internal"
+        say "         disk even without the stick. If that is not what you want,"
+        say "         remove $NEWROOT/root/.ssh/authorized_keys after this boot."
+        say "         (install-alpine now refuses to complete without a key, so"
+        say "          this only fires if the key was deleted deliberately.)"
+    fi
 fi
 
 # --- hand over ----------------------------------------------------------------
