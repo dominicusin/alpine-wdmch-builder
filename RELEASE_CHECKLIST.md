@@ -104,7 +104,22 @@ workflows (it needs built artifacts, so it is not a `validate.yml` step):
       that range is unreachable and the unit will not boot.
 - [ ] `p1 FW_TABLE` is backed up before any write, and is never overwritten
 - [ ] The installer refuses to run against the USB stick, which can claim
-      `/dev/sda` — formatting it would destroy the boot medium
+      `/dev/sda` — formatting it would destroy the boot medium. **Three
+      independent layers**, and 22 cases in `tests/test_rescue_refusal.sh`
+      prove the property without a WDMCH attached:
+      1. mount-table guard — a partition of the target disk mounted at
+         `/media/usb` means refuse. *This one was dead code: the `case` pattern
+         could never match, so it never fired. Fixed.*
+      2. boot-file probe — a vfat partition holding `sata.uImage` plus
+         `rescue.sata.dtb` is a rescue stick. Needs a real mount, so it is
+         **not** covered offline; it is the backstop behind layer 1.
+      3. factory-GPT detection — a stick has one FAT32 partition, so `p18` and
+         `p20` do not exist, `has_gpt` stays 0, and an unrecognised disk is
+         refused. This holds even with no rescue mount at all.
+- [ ] Only `p19` (SYSTEM_A) and `p20` (SYSTEM_B) may be written on the
+      factory table — checked where the partition table is known, not behind a
+      filesystem probe. Previously the only allowlist sat behind "does this
+      partition already hold ext4", so a GOLD slot without ext4 was writable. |
 - [ ] No build step writes to NAS block devices
 - [ ] USB rescue creation is read-only with respect to NAS
 

@@ -193,6 +193,77 @@ allow_case "p1 FW_TABLE on a factory disk"              1 1 0 refuse
 allow_case "p9 on --blank (ROOT_DEV forced to sda1)"    9 0 1 proceed
 
 echo
+echo "--- the factory-GPT detection: a THIRD independent guard ---"
+echo "    Even with no rescue mount at all, a stick cannot pass this: it has"
+echo "    one FAT32 partition, so p18 and p20 do not exist and has_gpt stays 0."
+
+python3 - "$SRC" > "$WORK/gpt.raw" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+start = s.index('has_gpt=0\nif [ -b "${DISK}1" ]')
+end = s.index('# On the factory table, only SYSTEM_A and SYSTEM_B may be written.', start)
+sys.stdout.write(s[start:end])
+PY
+
+test -s "$WORK/gpt.raw" || { echo "FAIL: could not extract the GPT detection"; exit 1; }
+# The same block-device seam as the rescue guard; without it has_gpt would
+# always be 0 and every case here would refuse for the wrong reason.
+sed 's/\[ -b "\${DISK}\([0-9]\+\)" \]/is_block "\${DISK}\1"/g' \
+    "$WORK/gpt.raw" > "$WORK/gpt.sh"
+grep -q 'is_block' "$WORK/gpt.sh" \
+    || { echo "FAIL: could not install the is_block seam on the GPT block"; exit 1; }
+
+gpt_case() {
+    # $1 label  $2 existing nodes  $3 blank  $4 want
+    local label="$1" nodes="$2" blank="$3" want="$4" out got
+    printf '%s\n' "$nodes" > "$WORK/nodes"
+
+    set +e
+    out=$(
+        export DISK=/dev/sda BLANK_DISK="$blank" ROOT_PART=20
+        is_block() { grep -qxF "$1" "$WORK/nodes"; }
+        log() { :; }
+        # shellcheck disable=SC1090
+        . "$WORK/gpt.sh" >/dev/null 2>&1
+        echo PROCEED
+    )
+    set -e
+
+    if printf '%s' "$out" | grep -q '^PROCEED$'; then got=proceed; else got=refuse; fi
+    if [ "$got" = "$want" ]; then
+        printf '  ok    %-48s -> %s\n' "$label" "$got"
+    else
+        printf '  FAIL  %-48s -> %s (expected %s)\n' "$label" "$got" "$want"
+        FAILED=1
+    fi
+}
+
+# A real rescue stick: one FAT32 partition, nothing else.
+gpt_case "rescue stick (only sda1 exists)" \
+    "/dev/sda1" 0 refuse
+
+# The factory disk, as it must look.
+gpt_case "factory disk (p1, p18, p20 present)" \
+    "/dev/sda1
+/dev/sda18
+/dev/sda20" 0 proceed
+
+# A factory disk missing only p18 must NOT be silently accepted.
+gpt_case "factory disk with p18 missing" \
+    "/dev/sda1
+/dev/sda20" 0 refuse
+
+# An unrelated disk with three partitions that are not the right ones.
+gpt_case "unrelated 3-partition disk" \
+    "/dev/sda1
+/dev/sda2
+/dev/sda3" 0 refuse
+
+# The escape hatch, when the operator is certain.
+gpt_case "rescue stick shape with --blank" \
+    "/dev/sda1" 1 proceed
+
+echo
 if [ "$FAILED" -eq 0 ]; then
     echo "install-alpine refusal guards: PASSED"
 else
