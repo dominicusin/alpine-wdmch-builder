@@ -498,15 +498,20 @@ if [ -f "$USB_ROOT/sata.uImage" ]; then
     cp "$USB_ROOT/sata.uImage" "$MNT/boot/Image" \
         && log "  sata.uImage -> /boot/Image ($(stat -c%s "$MNT/boot/Image") bytes)"
 else
-    log "  WARN: $USB_ROOT/sata.uImage not found - no kernel on the disk"
+    die "$USB_ROOT/sata.uImage not found - the installed system would have no kernel to boot"
 fi
 
 if [ -f "$USB_ROOT/rescue.sata.dtb" ]; then
     cp "$USB_ROOT/rescue.sata.dtb" "$MNT/boot/rtd1295-wd-mycloud-home.dtb" \
         && log "  rescue.sata.dtb -> /boot/rtd1295-wd-mycloud-home.dtb"
 else
-    log "  WARN: $USB_ROOT/rescue.sata.dtb not found - no DTB on the disk"
+    die "$USB_ROOT/rescue.sata.dtb not found - the installed system would have no device tree to boot"
 fi
+
+# Both were WARNs. An install that completes without a kernel or without a
+# DTB leaves a filesystem that cannot boot, and reports success while doing it.
+# That is the same fail-open shape as the firmware-table backup and the SSH
+# key: the operator is told it worked, and finds out at the next reboot.
 
 # The rescue initramfs itself is NOT a usable initrd for the installed system
 # (it is a fixed 4 MiB rescue image whose /init is the rescue script). Do not
@@ -559,14 +564,30 @@ for svc in networking dropbear crond syslog; do
 done
 
 # SSH: same public key as the rescue image, no password anywhere.
-if [ -f /root/.ssh/authorized_keys ]; then
+#
+# A missing key is fatal, not a warning. This is the ONLY way in: there is no
+# root password, the console is the sole alternative, and the operator is
+# standing at a serial console with a freshly formatted p20. The verification
+# block below checks that dropbear exists but never checked that a key arrived,
+# so "installed successfully" could have meant a system nobody can log into.
+if [ -s /root/.ssh/authorized_keys ]; then
     mkdir -p "$MNT/root/.ssh"
     cp /root/.ssh/authorized_keys "$MNT/root/.ssh/authorized_keys"
     chmod 700 "$MNT/root/.ssh"
     chmod 600 "$MNT/root/.ssh/authorized_keys"
-    log "  installed the rescue SSH public key into /root/.ssh/authorized_keys"
+    if [ -s "$MNT/root/.ssh/authorized_keys" ]; then
+        log "  installed the rescue SSH public key into /root/.ssh/authorized_keys"
+    else
+        die "the SSH key did not survive the copy onto the target"
+    fi
 else
-    log "  WARN: no authorized_keys in the rescue image - SSH will be locked out"
+    echo "" >&2
+    echo "ERROR: no authorized_keys in the rescue image." >&2
+    echo "       Refusing to report a successful install: there is no root" >&2
+    echo "       password, so without this key the installed system cannot be" >&2
+    echo "       reached over SSH and the only way in is the serial console." >&2
+    echo "       Build the rescue image with WDMCH_SSH_AUTHORIZED_KEY set." >&2
+    exit 1
 fi
 
 # Marker the rescue init looks for before handing over to this system.
