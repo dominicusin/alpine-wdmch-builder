@@ -54,27 +54,44 @@ pe_offset   = 0x40         (offset 60)
 
 ## Preparing the stick
 
-1. Format a USB stick as **FAT32, MBR, single partition**.
-2. Copy the entire build tree to the **root** of the stick:
+The stick must be **FAT32, MBR, single partition**, and the build tree must sit
+in its **root** — the vendor loader reads fixed filenames from there, so a
+`boot/` subdirectory cannot boot.
 
-   ```bash
-   mount /dev/sdX1 /mnt/stick
-   cp -r build/usb-tree-root/* /mnt/stick/
-   sync
-   ```
+Do it the verified way. It partitions, copies, and then proves the result,
+which is what catches a truncated write before you open the box:
 
-3. Verify the copy — this is the step that catches a truncated write:
+```bash
+tools/prepare-usb.sh --device /dev/sdX
+```
 
-   ```bash
-   cd /mnt/stick && sha256sum -c SHA256SUMS
-   ```
+`--device` is destructive and refuses a device that is not flagged removable
+unless you also pass `--force-internal`. Confirm the candidate with
+`lsblk -o NAME,SIZE,TYPE,MODEL,TRAN` first.
 
-4. Confirm the initramfs is still exactly 4 MiB after copying:
+Already have a stick mounted? Verify it in place; this is read-only and is the
+same check the script runs after copying:
 
-   ```bash
-   stat -c '%s %n' /mnt/stick/rescue.root.sata.cpio.gz_pad.img
-   # expect: 4194304 .../rescue.root.sata.cpio.gz_pad.img
-   ```
+```bash
+tools/prepare-usb.sh --image /mnt/stick
+```
+
+It confirms all six required files are present and non-empty, that
+`sata.uImage` still validates as an ARM64 Image, that the initramfs is still
+exactly 4194304 bytes, that `SHA256SUMS` matches, that there is no `boot/`
+directory, and that the offline repository has not lost packages.
+
+By hand, if you prefer — verify the outcome yourself, it is the whole point:
+
+```bash
+mount /dev/sdX1 /mnt/stick
+cp -a build/usb-tree-root/. /mnt/stick/     # note the /. - copies hidden files too
+sync
+cd /mnt/stick
+sha256sum -c SHA256SUMS                      # all three artifacts must be OK
+stat -c '%s' rescue.root.sata.cpio.gz_pad.img   # must be 4194304
+ls -d boot 2>/dev/null && echo "WRONG LAYOUT" || echo "root-level layout OK"
+```
 
 ## Booting
 

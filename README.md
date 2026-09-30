@@ -31,25 +31,26 @@ automatically when no factory partition is found.
 ## Quick Start
 
 ```bash
-# Clone and build
-git clone https://github.com/dominicusin/alpine-wdmch-builder.git
-cd alpine-wdmch-builder
-./build-image.sh
-
-# Or dry-run to validate setup
-./build-image.sh --dry-run
+# Verified path: partition, copy and PROVE the stick before touching the WDMCH.
+# A failed hardware session costs far more than this five-minute check.
+tools/prepare-usb.sh --device /dev/sdX     # destructive; refuses a non-removable disk
 ```
 
-## Using the rescue stick
+Already have a mounted stick? Verify it in place (read-only):
 
-Copy the build tree to the **root** of a FAT32 stick (MBR, single partition) —
-there is no `boot/` subdirectory, the loader reads fixed filenames from the root:
+```bash
+tools/prepare-usb.sh --image /mnt/stick
+```
+
+Doing it by hand instead:
 
 ```bash
 mount /dev/sdX1 /mnt/stick
-cp -r build/usb-tree-root/* /mnt/stick/
+cp -a build/usb-tree-root/. /mnt/stick/     # note the /. - copies hidden files too
 sync
 cd /mnt/stick && sha256sum -c SHA256SUMS
+# All three artifacts must report OK, and there must be NO boot/ directory:
+ls -d boot 2>/dev/null && echo "WRONG LAYOUT" || echo "root-level layout OK"
 ```
 
 Then power off the box, insert the stick, and hold the reset button while

@@ -17,10 +17,26 @@ Copy the build tree to the **root** of a FAT32 stick. The loader reads fixed
 filenames from the root; there is **no `boot/` subdirectory**.
 
 ```bash
+# Verified path: partition, copy and PROVE the stick before touching the WDMCH.
+# A failed hardware session costs far more than this five-minute check.
+tools/prepare-usb.sh --device /dev/sdX     # destructive; refuses a non-removable disk
+```
+
+Already have a mounted stick? Verify it in place (read-only):
+
+```bash
+tools/prepare-usb.sh --image /mnt/stick
+```
+
+Doing it by hand instead:
+
+```bash
 mount /dev/sdX1 /mnt/stick
-cp -r build/usb-tree-root/* /mnt/stick/
+cp -a build/usb-tree-root/. /mnt/stick/     # note the /. - copies hidden files too
 sync
 cd /mnt/stick && sha256sum -c SHA256SUMS
+# All three artifacts must report OK, and there must be NO boot/ directory:
+ls -d boot 2>/dev/null && echo "WRONG LAYOUT" || echo "root-level layout OK"
 ```
 
 The stick root holds `sata.uImage`, `rescue.sata.dtb`,
