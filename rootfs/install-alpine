@@ -98,13 +98,30 @@ esac
 # notes exactly this), so a careless "install-alpine /dev/sda" would erase
 # the very stick the system is running from. Detect and refuse.
 stick_whole=""
+# ${PROC_MOUNTS:-/proc/mounts} is a seam, not a configuration knob: unset, this
+# is the real file, so shipping behaviour is unchanged. It exists so the
+# refusal below can be driven against synthetic mount tables in
+# tests/test_rescue_refusal.sh. This is the single most dangerous path in the
+# project - if it stops working, the installer formats the stick it is running
+# from - so it must be executable on a machine with no WDMCH attached.
+mounts_file="${PROC_MOUNTS:-/proc/mounts}"
 for part in "$DISK"1 "$DISK"2 "$DISK"3; do
     [ -b "$part" ] || continue
-    if grep -qs "[[:space:]]/media/usb[[:space:]]" /proc/mounts 2>/dev/null; then
-        src=$(awk '$2 == "/media/usb" {print $1; exit}' /proc/mounts 2>/dev/null)
-        case "$src" in
-            "${part%[0-9]}") stick_whole="$part" ;;
-        esac
+    if grep -qs "[[:space:]]/media/usb[[:space:]]" "$mounts_file" 2>/dev/null; then
+        src=$(awk '$2 == "/media/usb" {print $1; exit}' "$mounts_file" 2>/dev/null)
+        # Compare the WHOLE DISK of the mount source with the whole disk of
+        # this candidate partition.
+        #
+        # This was a `case "$src" in "${part%[0-9]}")` with no wildcard, so
+        # the pattern was the literal /dev/sda while $src is a partition node
+        # like /dev/sda1. It could never match, stick_whole was never set, and
+        # the guard that stops the installer from erasing the stick it is
+        # running from never fired at all. Caught by
+        # tests/test_rescue_refusal.sh, which is the only reason it was found
+        # before someone pointed it at a live machine.
+        if [ -n "$src" ] && [ "${src%[0-9]}" = "${part%[0-9]}" ]; then
+            stick_whole="$part"
+        fi
     fi
 done
 if [ -n "$stick_whole" ]; then

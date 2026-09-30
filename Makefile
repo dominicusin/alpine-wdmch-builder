@@ -59,6 +59,7 @@ test: validate
 	bash tests/test_dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb build/kernel/rtd1295-wd-mycloud-home.dts
 	bash tests/test_rootfs.sh build/rootfs $$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none)
 	bash tests/test_install_verify.sh
+	bash tests/test_rescue_refusal.sh
 	bash tests/test_image.sh build/release
 	bash tests/test_workflows.sh
 
