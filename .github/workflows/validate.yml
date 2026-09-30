@@ -229,6 +229,43 @@ jobs:
           fi
           echo "no check reports success without testing something: OK"
 
+      - name: Assert the release version tracks the pinned Alpine release
+        run: |
+          # The tag scheme is VERSION, and VERSION encodes the Alpine release
+          # in its prefix (3.21.8-9 == Alpine 3.21.8, project iteration 9).
+          # That duplicates ALPINE_RELEASE from config/alpine.env in a second
+          # place with nothing keeping them in step, and a mismatch ships a
+          # package closure for one Alpine release under a version claiming
+          # another.
+          rel=$(grep -m1 '^ALPINE_RELEASE=' config/alpine.env | cut -d= -f2)
+          ver=$(cat VERSION)
+          echo "ALPINE_RELEASE=$rel   VERSION=$ver"
+          case "$ver" in
+            "$rel"-*) echo "VERSION tracks the pinned Alpine release: OK" ;;
+            *) echo "FAIL: VERSION '$ver' does not start with ALPINE_RELEASE '$rel'" >&2
+               echo "      The offline closure is built for $rel; the tag would claim otherwise." >&2
+               exit 1 ;;
+          esac
+          # And the series must match too, not just the point release.
+          series=$(grep -m1 '^ALPINE_VERSION=' config/alpine.env | cut -d= -f2)
+          case "$rel" in
+            "$series".*) : ;;
+            *) echo "FAIL: ALPINE_RELEASE '$rel' is not in the pinned series '$series'" >&2; exit 1 ;;
+          esac
+
+      - name: Reject a second hardcoded copy of the Alpine version
+        run: |
+          # config/alpine.env is the single source. A workflow that also
+          # hardcodes ALPINE_VERSION cannot be kept in step with it, and the
+          # one place it was used (the CI cache key) would restore the
+          # previous series' APK cache into a new-series build.
+          if grep -rnE '^\s*ALPINE_(VERSION|ARCH):' .github/workflows/ 2>/dev/null; then
+            echo "FAIL: a workflow hardcodes ALPINE_VERSION/ALPINE_ARCH." >&2
+            echo "      Read it from config/alpine.env instead." >&2
+            exit 1
+          fi
+          echo "Alpine version is single-sourced in config/alpine.env: OK"
+
       - name: Run repo layout test
         run: |
           bash tests/test_repo_layout.sh
