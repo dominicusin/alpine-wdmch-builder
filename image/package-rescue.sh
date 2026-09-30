@@ -60,7 +60,11 @@ echo "sata.uImage packaged (${FILE_SIZE} bytes)"
 
 # ---- 3. DTB ----------------------------------------------------------------------
 cp "$BUILD_DIR/rtd1295-wd-mycloud-home.dtb" "$RELEASE_DIR/rescue.sata.dtb"
-echo "rescue.sata.dtb packaged"
+# `cp` failing aborts the build, but a zero-byte or truncated DTB would have
+# been announced as "packaged" all the same.
+DTB_SIZE=$(stat -c '%s' "$RELEASE_DIR/rescue.sata.dtb" 2>/dev/null || echo 0)
+[ "$DTB_SIZE" -gt 0 ] || { echo "FAIL: rescue.sata.dtb is empty" >&2; exit 1; }
+echo "rescue.sata.dtb packaged (${DTB_SIZE} bytes)"
 
 # ---- 4. rescue initramfs (must be exactly 4 MiB; built by build-rootfs.sh) --------
 RESCUE_SRC="$BUILD_DIR/rescue.root.sata.cpio.gz_pad.img"
@@ -232,4 +236,26 @@ PROJ_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # packages that were not in the closure.
 rm -f "$PROJ_DIR/build/flash.zip"
 ( cd "$USB_TREE" && zip -r -q "$PROJ_DIR/build/flash.zip" . )
-echo "flash.zip created at build/flash.zip"
+# flash.zip is the delivery vehicle, and "created" used to mean only that zip
+# exited 0. An empty or near-empty archive would have been announced as a
+# finished stick. Check it carries what the stick needs to boot.
+ZIP_PATH="$PROJ_DIR/build/flash.zip"
+ZIP_SIZE=$(stat -c '%s' "$ZIP_PATH" 2>/dev/null || echo 0)
+[ "$ZIP_SIZE" -gt 0 ] || { echo "FAIL: flash.zip is empty" >&2; exit 1; }
+# Capture the listing once. Piping it into `grep -q` is a trap here: grep
+# exits on the first match, the upstream awk takes SIGPIPE, and under
+# `set -o pipefail` the whole pipeline returns 141 even though the entry IS
+# present - so a good archive would be reported as broken. Same bug class as
+# the `grep -x` SIGPIPE fix earlier in this project.
+ZIP_LISTING=$(unzip -l "$ZIP_PATH" 2>/dev/null | awk '{print $4}')
+for required in sata.uImage rescue.sata.dtb rescue.root.sata.cpio.gz_pad.img \
+                SHA256SUMS manifest.json README.txt; do
+    # A here-string, not a pipe. `printf ... | grep -q` would still SIGPIPE:
+    # grep exits on the first match, printf takes the signal, and pipefail
+    # turns a present entry into exit 141 and a false "missing" report.
+    if ! grep -qxF "$required" <<< "$ZIP_LISTING"; then
+        echo "FAIL: flash.zip is missing $required" >&2
+        exit 1
+    fi
+done
+echo "flash.zip created at build/flash.zip (${ZIP_SIZE} bytes, 6 required entries present)"
