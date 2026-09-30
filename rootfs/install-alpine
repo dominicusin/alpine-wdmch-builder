@@ -232,6 +232,37 @@ if [ "$ASSUME_YES" != "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 2b. firmware table backup (p1) - BEFORE the first destructive write
+# ---------------------------------------------------------------------------
+# This belongs here. The header above describes it as step 2 and the release
+# checklist says "backed up before any write", but it used to sit at step 5,
+# after mke2fs had already reformatted p20. A backup taken after the write it
+# was meant to precede is not a backup.
+#
+# The copy is made to /tmp in the initramfs and placed on the target later,
+# once the target is mounted.
+#
+# A failed read is now fatal. It used to be a WARN, which is the worst possible
+# outcome: the operator is told the install succeeded, has no firmware-table
+# copy, and finds that out only if the unit later fails to boot. The result is
+# also checked non-empty, because dd can exit 0 having written nothing.
+if [ "$has_gpt" = "1" ]; then
+    log "backing up the firmware table (${DISK}1) before any write ..."
+    FW_BACKUP=/tmp/wdmch-fw-table-backup.bin
+    rm -f "$FW_BACKUP"
+    if dd if="${DISK}1" of="$FW_BACKUP" bs=512 2>/dev/null && [ -s "$FW_BACKUP" ]; then
+        log "  saved $(stat -c%s "$FW_BACKUP") bytes to $FW_BACKUP"
+    else
+        echo "" >&2
+        echo "ERROR: could not read the firmware table from ${DISK}1." >&2
+        echo "       Refusing to continue. The firmware table is the one partition" >&2
+        echo "       the vendor loader depends on; a backup that failed silently" >&2
+        echo "       would leave no way back if the unit stopped booting." >&2
+        exit 1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 3. stop anything using the disk
 # ---------------------------------------------------------------------------
 log "unmounting anything already mounted from $DISK ..."
@@ -357,15 +388,19 @@ done
 mkdir -p "$MNT"/{proc,sys,dev,run,tmp,root,mnt,media,boot,etc}
 
 # ---------------------------------------------------------------------------
-# 5. firmware table backup (p1) - the checklist requires it before any writing
+# 5. place the pre-write firmware table backup on the target
 # ---------------------------------------------------------------------------
-if [ "$has_gpt" = "1" ] && [ -b "${DISK}1" ]; then
-    log "backing up the firmware table (${DISK}1) to /root on the new system ..."
-    mkdir -p "$MNT/root"
-    if dd if="${DISK}1" of="$MNT/root/wdmch-fw-table-backup.bin" bs=512 2>/dev/null; then
-        log "  saved /root/wdmch-fw-table-backup.bin ($(stat -c%s "$MNT/root/wdmch-fw-table-backup.bin" 2>/dev/null || echo '?') bytes)"
+# Reused from step 2b rather than read again. Re-reading here would take a
+# second copy AFTER p20 was already formatted, which is the defect step 2b was
+# moved to fix.
+if [ "$has_gpt" = "1" ]; then
+    if [ -s "$FW_BACKUP" ]; then
+        mkdir -p "$MNT/root"
+        cp -f "$FW_BACKUP" "$MNT/root/wdmch-fw-table-backup.bin" \
+            || die "could not place the firmware table backup on the target"
+        log "  firmware table backup placed at /root/wdmch-fw-table-backup.bin ($(stat -c%s "$MNT/root/wdmch-fw-table-backup.bin" 2>/dev/null || echo '?') bytes)"
     else
-        log "  WARN: could not read ${DISK}1"
+        die "internal: the pre-write firmware table backup disappeared"
     fi
 fi
 
