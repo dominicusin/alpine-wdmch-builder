@@ -37,6 +37,16 @@ if ! echo "$PINNED_REF" | grep -Eq '^[0-9a-f]{7,40}$'; then
     echo "ERROR: KERNEL_REF='$PINNED_REF' is not a git commit SHA." >&2
     exit 1
 fi
+# Require the full 40. The regex above and the post-checkout comparison below
+# (a prefix match) both tolerate an abbreviated SHA, which would quietly make
+# this "immutable" lock weaker than it looks. The fetch would usually fail on
+# a short SHA, but that is luck, not enforcement.
+if [ "${#PINNED_REF}" -ne 40 ]; then
+    echo "ERROR: KERNEL_REF='$PINNED_REF' is ${#PINNED_REF} characters." >&2
+    echo "       Pin the full 40-character SHA: a prefix is ambiguous in a" >&2
+    echo "       file that exists to be immutable." >&2
+    exit 1
+fi
 
 echo "=== Kernel source: $GIT_REPO @ $PINNED_REF ==="
 

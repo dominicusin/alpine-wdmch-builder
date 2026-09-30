@@ -75,8 +75,17 @@ jobs:
             echo "FAIL: KERNEL_REF is a floating reference" >&2
             exit 1
           fi
-          echo "$ref" | grep -Eq '^[0-9a-f]{7,40}$' || {
-            echo "FAIL: KERNEL_REF is not a commit SHA" >&2; exit 1; }
+          # Full length, not 7-40. kernel/fetch-kernel.sh's own check is
+          # ^[0-9a-f]{7,40}$ and its post-checkout comparison is a prefix
+          # match ("$PINNED_REF"*), so an abbreviated SHA passes both and
+          # would still be a weaker pin in a file meant to be immutable. It
+          # would probably fail at fetch time, but by luck, not by design.
+          if [ "${#ref}" -ne 40 ]; then
+            echo "FAIL: KERNEL_REF is ${#ref} chars, not a full 40-char SHA" >&2
+            exit 1
+          fi
+          echo "$ref" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "FAIL: KERNEL_REF is not a 40-char lowercase hex SHA" >&2; exit 1; }
 
       - name: Reject any workflow that rewrites the kernel pin
         run: |
