@@ -116,7 +116,20 @@ run_build() {
     echo "Packaging rescue artifacts..."
     bash image/package-rescue.sh
 
-    echo "=== Build complete ==="
+    # Verify before declaring success.
+    #
+    # This used to end at an `ls -la build/release/`, so "Build complete"
+    # meant only that the scripts returned 0. A local build - which is what
+    # README.md's Quick Start tells people to run - got no verification at
+    # all, because the CI workflows run `make test` separately. The result
+    # was a success message for a build whose artifacts might be malformed.
+    # `make validate` is the same check CI relies on; calling it here means
+    # the message is earned.
+    echo ""
+    echo "Verifying artifacts..."
+    make validate
+
+    echo "=== Build complete and verified ==="
     ls -la build/release/
 }
 
