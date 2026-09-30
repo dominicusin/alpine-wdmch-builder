@@ -43,6 +43,19 @@ sed 's/\[ -b "\$part" \]/is_block "$part"/g' "$WORK/guards.raw" > "$WORK/guards.
 grep -q 'is_block' "$WORK/guards.sh" \
     || { echo "FAIL: could not install the is_block seam"; exit 1; }
 
+# The factory-table allowlist lives further down, next to the GPT detection.
+python3 - "$SRC" > "$WORK/allow.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+start = s.index('# On the factory table, only SYSTEM_A and SYSTEM_B may be written.')
+end = s.index('ROOT_DEV="${DISK}${ROOT_PART}"', start)
+sys.stdout.write(s[start:end])
+PY
+
+test -s "$WORK/allow.sh" || { echo "FAIL: could not extract the partition allowlist"; exit 1; }
+grep -q '19|20' "$WORK/allow.sh" \
+    || { echo "FAIL: extraction lost the 19/20 allowlist"; exit 1; }
+
 FAILED=0
 
 run_case() {
@@ -138,6 +151,46 @@ run_case "p20 as --root-part, stick elsewhere" 20 \
 /dev/sdb1" \
     "/dev/sdb1 /media/usb vfat rw,relatime 0 0" \
     proceed
+
+echo
+echo "--- the factory-table allowlist (only p19/p20 may be written) ---"
+echo "    The partition number is checked where the partition table is known,"
+echo "    not behind a filesystem probe. Previously the only 19|20 allowlist"
+echo "    sat behind 'has ext4', so a GOLD slot without ext4 was writable."
+
+allow_case() {
+    # $1 label  $2 root part  $3 has_gpt  $4 blank  $5 want
+    local label="$1" rootpart="$2" has_gpt="$3" blank="$4" want="$5" out got
+
+    set +e
+    out=$(
+        export DISK=/dev/sda ROOT_PART="$rootpart" \
+               has_gpt="$has_gpt" BLANK_DISK="$blank"
+        # shellcheck disable=SC1090
+        . "$WORK/allow.sh" >/dev/null 2>&1
+        echo PROCEED
+    )
+    set -e
+
+    if printf '%s' "$out" | grep -q '^PROCEED$'; then got=proceed; else got=refuse; fi
+    if [ "$got" = "$want" ]; then
+        printf '  ok    %-48s -> %s\n' "$label" "$got"
+    else
+        printf '  FAIL  %-48s -> %s (expected %s)\n' "$label" "$got" "$want"
+        FAILED=1
+    fi
+}
+
+allow_case "p20 SYSTEM_B on a factory disk"            20 1 0 proceed
+allow_case "p19 SYSTEM_A on a factory disk"            19 1 0 proceed
+allow_case "p9 ROOTFS_GOLD on a factory disk"           9 1 0 refuse
+allow_case "p2 KERNEL_A on a factory disk"              2 1 0 refuse
+allow_case "p18 CONFIG on a factory disk"              18 1 0 refuse
+allow_case "p22 DATA on a factory disk"                22 1 0 refuse
+allow_case "p24 DISKVOLUME1 on a factory disk"         24 1 0 refuse
+allow_case "p1 FW_TABLE on a factory disk"              1 1 0 refuse
+# On a blank disk the number is irrelevant: ROOT_DEV is forced to $DISK1.
+allow_case "p9 on --blank (ROOT_DEV forced to sda1)"    9 0 1 proceed
 
 echo
 if [ "$FAILED" -eq 0 ]; then

@@ -187,6 +187,27 @@ else
     log "--blank: no factory GPT, will create a single ext4 partition"
 fi
 
+# On the factory table, only SYSTEM_A and SYSTEM_B may be written.
+#
+# The only previous restriction was p1 (:94) plus a `19|20` allowlist deeper
+# down that was reached ONLY when the target partition already held ext4. So
+# `--root-part 9` against a GOLD firmware slot that did not happen to contain
+# ext4 would have been formatted, contradicting this script's own header,
+# which promises the A/B/GOLD slots are never modified. The allowlist belongs
+# here, where the partition table is already known, not behind a filesystem
+# probe.
+if [ "$has_gpt" = "1" ] && [ "$BLANK_DISK" = "0" ]; then
+    case "$ROOT_PART" in
+        19|20) : ;;
+        *) echo "ERROR: refusing to write partition $ROOT_PART." >&2
+           echo "       On the factory table only p19 (SYSTEM_A) and p20" >&2
+           echo "       (SYSTEM_B) may be written. p1 holds the firmware table," >&2
+           echo "       p2-p9 the A/B/GOLD firmware slots, p18 CONFIG, and" >&2
+           echo "       p22/p24 hold user data." >&2
+           exit 1 ;;
+    esac
+fi
+
 ROOT_DEV="${DISK}${ROOT_PART}"
 [ "$has_gpt" = "1" ] || ROOT_DEV="${DISK}1"
 
@@ -310,13 +331,10 @@ else
     if [ "$already_ours" = "1" ]; then
         log "$ROOT_DEV already carries label $ROOT_LABEL - reusing it"
     elif [ "$has_ext4" = "1" ]; then
+        # The partition number was already restricted to 19/20 above, where
+        # the partition table is known. This branch only has to say what it is
+        # about to do.
         log "$ROOT_DEV holds an existing ext4 filesystem - reformatting with label $ROOT_LABEL"
-        case "$ROOT_PART" in
-            19|20) : ;;
-            *) echo "ERROR: partition $ROOT_PART is outside the SYSTEM_A/SYSTEM_B" >&2
-               echo "       slots and already holds data - refusing to reformat it" >&2
-               exit 1 ;;
-        esac
         run_mke2fs "$ROOT_DEV" || die "mke2fs failed on $ROOT_DEV"
     else
         log "formatting $ROOT_DEV ..."
