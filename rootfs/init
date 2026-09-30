@@ -173,6 +173,17 @@ if [ -f /media/usb/norescue ]; then
     echo "[init] norescue marker present - skipping the handoff to the installed system"
 elif [ -n "$(findfs LABEL=wdmch-root 2>/dev/null)" ]; then
     handoff_available=1
+else
+    # Not a safety problem - the rescue shell is the safe state and falling
+    # back to it is the correct outcome. But silence is a diagnosis problem:
+    # an operator who installed successfully, pulled the stick and expected
+    # Alpine gets a shell with no explanation of why. Say what was looked for.
+    echo ""
+    echo "[init] no filesystem labelled 'wdmch-root' found - staying in rescue."
+    echo "[init]   expected an installed system on the internal disk (p20)."
+    echo "[init]   if you just installed, check /etc/wdmch-installed and the"
+    echo "[init]   label on the target partition."
+    echo ""
 fi
 
 if [ "$handoff_available" = "1" ] && [ -x /etc/init.d/99-disk-root ]; then
