@@ -275,6 +275,29 @@ jobs:
           fi
           echo "Alpine version is single-sourced in config/alpine.env: OK"
 
+      - name: Planning documents must not drift from the repo
+        run: |
+          # Every number in ROADMAP.md and STRATEGY.md is a claim about this
+          # repository. The whole point of this series is that a document can
+          # assert something true-looking and wrong - a guard that never
+          # fired, a backup taken after the write - and nothing notices unless
+          # something compares it. So compare.
+          v=$(cat VERSION)
+          if grep -nE 'v3\.21\.8-(9|1[0-4])\b' ROADMAP.md STRATEGY.md 2>/dev/null; then
+            echo "FAIL: a planning document names a release older than VERSION ($v)" >&2
+            echo "      Refresh the header when the release version changes." >&2
+            exit 1
+          fi
+          n_tests=$(sed -n '/^test:/,/^$/p' Makefile | grep -c 'bash tests/')
+          if grep -qE '[0-9]+ тестовых|all [0-9]+ test scripts' ROADMAP.md 2>/dev/null; then
+            stated=$(grep -oE '[0-9]+ тестовых' ROADMAP.md | head -1 | grep -oE '[0-9]+')
+            if [ "$stated" != "$n_tests" ]; then
+              echo "FAIL: ROADMAP.md says $stated test scripts, the Makefile runs $n_tests" >&2
+              exit 1
+            fi
+          fi
+          echo "Planning documents match the repo: OK"
+
       - name: Run repo layout test
         run: |
           bash tests/test_repo_layout.sh
