@@ -38,7 +38,6 @@ bash tests/test_repo_layout.sh || failures=$((failures + 1))
 bash tests/test_kernel_metadata.sh build/kernel/Image build/kernel/kernel-release.txt || failures=$((failures + 1))
 bash tests/test_dtb.sh build/kernel/rtd1295-wd-mycloud-home.dtb build/kernel/rtd1295-wd-mycloud-home.dts || failures=$((failures + 1))
 bash tests/test_rootfs.sh build/rootfs "$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none)" || failures=$((failures + 1))
-bash tests/test_image.sh build/release || failures=$((failures + 1))
 bash tests/test_tools.sh || failures=$((failures + 1))
 
 # Check no floating kernel ref

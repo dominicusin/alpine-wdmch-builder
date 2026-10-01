@@ -141,7 +141,7 @@ jobs:
         run: |
           # release.yml's step is called "Run all tests" but used to invoke
           # three scripts by hand, so test_rootfs, test_install_verify,
-          # test_image, test_dtb and test_kernel_metadata never ran in CI -
+          # test_dtb and test_kernel_metadata never ran in CI -
           # their guards existed only on the maintainer's machine. Naming
           # individual scripts in the publishing workflows re-introduces
           # that; `make test` is the single source of truth.
