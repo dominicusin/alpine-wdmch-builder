@@ -74,6 +74,7 @@ test: validate
 	bash tests/test_backup_fw.sh
 	bash tests/test_verifiers.sh
 	bash tests/test_workflows.sh
+	bash tests/test_planning_count_guard.sh
 	bash test-flash.sh
 
 clean:

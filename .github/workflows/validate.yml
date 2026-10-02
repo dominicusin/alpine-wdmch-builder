@@ -342,7 +342,13 @@ jobs:
             echo "      Refresh the header when the release version changes." >&2
             exit 1
           fi
-          n_tests=$(sed -n '/^test:/,/^$/p' Makefile | grep -c 'bash tests/')
+          # Count every shell invocation in the `test:` target, not just the ones
+          # under tests/. test-flash.sh lives at the repository root, so counting
+          # `bash tests/` reported 20 for a target that runs 21 - and then
+          # demanded the ROADMAP be edited DOWN to the wrong number. A guard that
+          # cries wolf about a correct document trains everyone to edit the
+          # document instead of reading it.
+          n_tests=$(sed -n '/^test:/,/^$/p' Makefile | grep -cE '^[[:space:]]+bash ')
           if grep -qE '[0-9]+ тестовых|all [0-9]+ test scripts' ROADMAP.md 2>/dev/null; then
             stated=$(grep -oE '[0-9]+ тестовых' ROADMAP.md | head -1 | grep -oE '[0-9]+')
             if [ "$stated" != "$n_tests" ]; then
