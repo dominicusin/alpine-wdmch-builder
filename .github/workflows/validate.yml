@@ -95,8 +95,8 @@ jobs:
           # remote for a commit it does not have: "upload-pack: not our ref".
           # The pin must come from the committed file and nowhere else.
           # (Reading the value back and echoing it is fine; only a write is not.)
-          if grep -rnE 'KERNEL_REF=.*>>?[[:space:]]*(config/)?source-lock\.env' \
-               .github/ scripts/ Makefile 2>/dev/null; then
+          if git grep -nE 'KERNEL_REF=.*>>?[[:space:]]*(config/)?source-lock\.env' \
+               -- '*.sh' '*.yml' '*.yaml' Makefile 2>/dev/null; then
             echo "FAIL: a workflow or script writes KERNEL_REF into the lock file; the pin is committed in config/source-lock.env" >&2
             exit 1
           fi
@@ -130,8 +130,22 @@ jobs:
           # The vendor loader reads fixed filenames from the ROOT of the FAT
           # stick. Any doc still telling users to create boot/ on the stick
           # produces a stick that cannot boot - fail the build instead.
-          if grep -rnE 'boot/(sata\.uImage|rescue\.sata\.dtb|rescue\.root)' \
-               docs/ README.md .github/ 2>/dev/null; then
+          #
+          # Scope note, because a narrow guard is worse than none: the
+          # original pattern listed three filenames and let boot/apks,
+          # boot/SHA256SUMS and boot/manifest.json through. The list below
+          # is every payload the stick actually carries.
+          #
+          # `/boot/Image` is deliberately NOT matched. With a leading slash
+          # it is the installed system's boot directory, which docs/ correctly
+          # describe (docs/RUNBOOK.md, docs/usb-rescue.md). Distinguishing
+          # "/boot/Image on p20" from "boot/Image on the stick" needs to know
+          # which device is meant, which grep cannot do. Matching it anyway
+          # would reject correct documentation, and a guard that cries wolf
+          # gets switched off.
+          if grep -rnE 'boot/(sata\.uImage|rescue\.|apks|SHA256SUMS|manifest\.json|README\.txt|initramfs)' \
+               docs/ README.md .github/ rootfs/ image/ scripts/ 2>/dev/null \
+             | grep -v '^\.github/workflows/validate\.yml:'; then
             echo "FAIL: documentation still references a boot/ subdirectory on the USB stick" >&2
             exit 1
           fi
@@ -224,6 +238,13 @@ jobs:
           # `exit 0`, so the window is scanned per file rather than per line.
           # The second shape is a failure branch that only prints a warning:
           # `|| echo "WARNING: ..."` on a command whose failure matters.
+          # Scope, stated so it is not mistaken for an oversight: this scans
+          # TEST scripts only. rootfs/ is the product, not the tests, and
+          # the equivalent failure there - a critical step skipped while the
+          # run still reports success - is covered directly and specifically
+          # by tests/test_no_fail_open.sh against rootfs/install-alpine.
+          # Applying this heuristic to product code would flag the
+          # deliberately error-tolerant hardware pokes in rootfs/init.
           bad=""
           for f in $(git ls-files 'tests/*.sh' 'tools/*.sh' test-flash.sh); do
             [ -f "$f" ] || continue
