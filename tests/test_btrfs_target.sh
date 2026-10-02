@@ -52,8 +52,15 @@ check "  ...so a two-device filesystem is actually created" \
 # --- the profiles, which the sizes force -------------------------------------
 check "the data profile is single" \
       "$(cond 'grep -qE "^BTRFS_DATA_PROFILE=single$" "$INST"'; echo $?)"
-check "the metadata profile is dup" \
-      "$(cond 'grep -qE "^BTRFS_META_PROFILE=dup$" "$INST"'; echo $?)"
+# raid1, not dup: dup duplicates metadata WITHIN a device, which the btrfs docs
+# say "negates the purpose of increased redundancy", and btrfs-progs 6.11 warns
+# about it at mkfs time. Measured both on loop devices with the shipped binary.
+check "the metadata profile is raid1 (cross-device, not dup)" \
+      "$(cond 'grep -qE "^BTRFS_META_PROFILE=raid1$" "$INST"'; echo $?)"
+check "  ...and the superseded dup profile is gone" \
+      "$(cond '! grep -qE "^BTRFS_META_PROFILE=dup$" "$INST"'; echo $?)"
+check "  ...with the measurement that decided it recorded" \
+      "$(cond 'grep -q "DUP is not recommended" "$INST"'; echo $?)"
 check "  ...and both are passed to mkfs" \
       "$(cond 'grep -q -- "-d \"\$BTRFS_DATA_PROFILE\"" "$INST" && grep -q -- "-m \"\$BTRFS_META_PROFILE\"" "$INST"'; echo $?)"
 check "  ...a redundant data profile would cap the fs at 20 GB" \

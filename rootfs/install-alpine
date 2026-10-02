@@ -80,7 +80,8 @@
 #   p20 (SYSTEM_B) is 20 GB and p21 (DATA) is 7.3 TB. They are joined into a
 #   single btrfs filesystem. No md RAID is created and none is assembled.
 #
-#   Data profile single, metadata dup - forced by the sizes. Any REDUNDANT data
+#   Data profile single, metadata raid1. See the profile note below for why the
+#   metadata profile is raid1 and not dup.
 #   profile is capped by the smallest device, so raid1 across 20 GB + 7.3 TB
 #   yields 20 GB usable: the whole of the small disk, and not enough for the
 #   system. `single` uses both devices in full; `dup` keeps the metadata - the
@@ -111,12 +112,38 @@ ROOT_PART=20
 # across both. --single-dev falls back to p20 alone.
 DATA_PART=21
 SINGLE_DEV=0
-# Data profile single, metadata dup. Any REDUNDANT data profile is capped by the
-# smallest device: raid1 across 20 GB + 7.3 TB yields 20 GB usable, which is
-# exactly the small disk and nothing more. `single` uses both devices fully;
-# `dup` keeps the metadata - the part whose loss is silent - in two copies.
+# Data profile single, metadata raid1.
+#
+# The data half is forced by the sizes. Any REDUNDANT data profile is capped by
+# the smallest device: raid1 across 20 GB + 7.3 TB yields 20 GB usable, which is
+# exactly the small disk and nothing more. `single` uses both devices in full.
+#
+# The metadata half was WRONG at first and the comment above it explained why it
+# was not. It read "dup keeps the metadata in two copies", which is not what dup
+# does on a multi-device filesystem: dup duplicates within a device, and the
+# btrfs docs are explicit that this "negates the purpose of increased redundancy
+# and just wastes filesystem space". btrfs-progs 6.11 says so at mkfs time:
+#
+#     WARNING: DUP is not recommended on filesystem with multiple devices
+#
+# So the setting bought no cross-device protection and paid for it in space -
+# the worst of both, while the comment claimed the opposite.
+#
+# Measured on this host with the SHIPPED mkfs.btrfs from the offline repo
+# (btrfs-progs 6.11, run under qemu-aarch64 on two loop devices), 2026-10-02:
+#
+#     -d single -m dup     -> WARNING, 2 devices, 1.00GiB total
+#     -d single -m raid1   -> no warning, 2 devices, 1.00GiB total,
+#                             metadata mirrored onto BOTH members
+#
+# raid1 metadata does not cost usable space here: it caps only the METADATA
+# space at twice the smallest device (~40 GB), which is two orders of magnitude
+# more than a system root needs. The data capacity is still the full 20 GB +
+# 7.3 TB, because the data profile - not the metadata profile - is what is
+# capped. The redundancy is therefore real this time: losing one member leaves
+# the filesystem mountable and writable.
 BTRFS_DATA_PROFILE=single
-BTRFS_META_PROFILE=dup
+BTRFS_META_PROFILE=raid1
 # The system goes in the top-level subvolume (id 5). A named subvolume would
 # mean the handoff must resolve a subvolume as well as a device; at the top
 # level the filesystem label alone identifies the system, which is what findfs
