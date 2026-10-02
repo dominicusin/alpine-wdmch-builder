@@ -13,14 +13,19 @@
 # skips the handoff and drops to the rescue shell instead. The marker is
 # one-shot-safe to remove: delete the file and the next boot hands over.
 
-ROOT_LABEL=wdmch-root
-NEWROOT=/newroot
-USB_ROOT=/media/usb
+# Overridable so the decision logic can be tested without root, a mount
+# namespace or the real hardware - see tests/test_handoff.sh. The defaults are
+# the production values; nothing in the rescue image overrides them.
+ROOT_LABEL=${ROOT_LABEL:-wdmch-root}
+NEWROOT=${NEWROOT:-/newroot}
+USB_ROOT=${USB_ROOT:-/media/usb}
+MOUNTS=${MOUNTS:-/proc/mounts}
+RESCUE_SSH_KEY=${RESCUE_SSH_KEY:-/root/.ssh/authorized_keys}
 
 kmsg() { echo "<6>wdmch-rescue: $*" > /dev/kmsg 2>/dev/null; }
 say()  { echo "[handoff] $*"; kmsg "$*"; }
 
-is_mounted() { grep -qs "[[:space:]]$1[[:space:]]" /proc/mounts; }
+is_mounted() { grep -qs "[[:space:]]$1[[:space:]]" "$MOUNTS"; }
 
 # --- escape hatch ------------------------------------------------------------
 if [ -f "$USB_ROOT/norescue" ]; then
@@ -104,9 +109,9 @@ fi
 # present. But a key from removable media has just become a persistent
 # credential on the internal disk, so it says so plainly and says how to undo
 # it, rather than appearing as a side effect.
-if [ -f /root/.ssh/authorized_keys ] && [ ! -f "$NEWROOT/root/.ssh/authorized_keys" ]; then
+if [ -f "$RESCUE_SSH_KEY" ] && [ ! -f "$NEWROOT/root/.ssh/authorized_keys" ]; then
     mkdir -p "$NEWROOT/root/.ssh"
-    if cp /root/.ssh/authorized_keys "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null; then
+    if cp "$RESCUE_SSH_KEY" "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null; then
         chmod 700 "$NEWROOT/root/.ssh" 2>/dev/null
         chmod 600 "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null
         say "WARNING: the installed system had NO SSH key, so the RESCUE key was"
