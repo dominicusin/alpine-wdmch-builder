@@ -42,23 +42,47 @@ if command -v findfs >/dev/null 2>&1; then
     candidate=$(findfs "LABEL=$ROOT_LABEL" 2>/dev/null)
 fi
 
-# Fallback for an unlabelled system: the partitions the pinned upstream
-# rescue init scans (symops/monarch-6.18 initramfs/init probes sda9, sda18
-# and sda19..sda24), filtered to ext4 with a usable init inside.
+# Fallback for an unlabelled system.
+#
+# This existed because install-alpine always writes the wdmch-root label, so an
+# UNLABLED candidate can only be something install-alpine did not create - which
+# on a WDMCH means a factory slot. docs/RECOVERY.md is explicit:
+#
+#     DO NOT boot the GOLD partition. GOLD is a factory-reset appliance,
+#     not a safe fallback.
+#
+# and this loop listed /dev/sda9 - ROOTFS_GOLD - in the scan. If GOLD mounted as
+# ext4 and carried an init, the rescue image would have switch_root'd into the
+# one slot the operator was told never to boot. Nothing else would have caught
+# it: the refusal to write GOLD is an installer guard, and this is the boot
+# path, which runs no such check.
+#
+# The scan is therefore restricted to partitions that are not vendor slots. The
+# GOLD entry is gone, and every candidate is additionally checked against its
+# PARTLABEL so a future slot cannot be reintroduced by adding a line here.
 if [ -z "$candidate" ]; then
-    say "no filesystem labelled $ROOT_LABEL - scanning the WDMCH layout"
-    for p in /dev/sda20 /dev/sda19 /dev/sda21 /dev/sda22 /dev/sda24 /dev/sda9; do
-        [ -b "$p" ] || continue
-        [ "$p" = "$candidate" ] && continue
-        if mkdir -p "$NEWROOT" && mount -t ext4 "$p" "$NEWROOT" 2>/dev/null; then
-            if [ -x "$NEWROOT/sbin/init" ] || [ -x "$NEWROOT/init" ] \
-               || [ -x "$NEWROOT/usr/sbin/init" ] || [ -x "$NEWROOT/lib/systemd/systemd" ]; then
-                candidate="$p"
-                break
-            fi
-            umount "$NEWROOT" 2>/dev/null
+  say "no filesystem labelled $ROOT_LABEL - scanning the WDMCH layout"
+for p in /dev/sda20 /dev/sda19 /dev/sda21 /dev/sda22 /dev/sda24; do
+    [ -b "$p" ] || continue
+    [ "$p" = "$candidate" ] && continue
+    plabel=""
+    if command -v blkid >/dev/null 2>&1; then
+        plabel=$(blkid -s PARTLABEL -o value "$p" 2>/dev/null || true)
+    fi
+    case "$plabel" in
+        ""|SYSTEM_B|SYSTEM_A) : ;;                       # not a factory slot
+        *) say "skipping $p (PARTLABEL '$plabel' is a vendor slot)"
+           continue ;;
+    esac
+    if mkdir -p "$NEWROOT" && mount -t ext4 "$p" "$NEWROOT" 2>/dev/null; then
+        if [ -x "$NEWROOT/sbin/init" ] || [ -x "$NEWROOT/init" ] \
+           || [ -x "$NEWROOT/usr/sbin/init" ] || [ -x "$NEWROOT/lib/systemd/systemd" ]; then
+            candidate="$p"
+            break
         fi
-    done
+        umount "$NEWROOT" 2>/dev/null
+    fi
+done
 fi
 
 if [ -z "$candidate" ]; then

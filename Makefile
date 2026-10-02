@@ -66,6 +66,7 @@ test: validate
 	bash tests/test_p1_backup.sh
 	bash tests/test_no_fail_open.sh
 	bash tests/test_handoff.sh
+	bash tests/test_vendor_slots.sh
 	bash tests/test_init_disk.sh
 	bash tests/test_resolver.sh
 	bash tests/test_preflight.sh
