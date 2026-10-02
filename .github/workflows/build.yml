@@ -182,8 +182,11 @@ jobs:
           # test-flash.sh is in the Makefile too, not called separately here:
           # it validates build/flash.zip, and the release jobs that actually
           # publish that file had no way to run it.
-          echo "=== make test ==="
-          make test
+          # ci-run-tests.sh, not a bare `make test`: it writes the failing
+          # output to the job summary and an artifact. Run 37069902973 failed
+          # here and GitHub served an empty log for both jobs, so the failure was
+          # real but undiagnosable without repeating a 30-minute kernel build.
+          bash tools/ci-run-tests.sh
 
       # This workflow only runs on branch pushes and PRs, never on a tag, so
       # there is no tag-specific upload to do here: release.yml is the only

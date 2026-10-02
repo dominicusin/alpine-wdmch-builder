@@ -85,8 +85,9 @@ jobs:
           # test_rootfs, test_install_verify, test_dtb and
           # test_kernel_metadata never ran in CI at all, so their guards
           # existed only on this machine.
-          echo "=== make test ==="
-          make test
+          # ci-run-tests.sh, not a bare `make test`: see the note in
+          # build.yml. A failing step whose log is empty is not a result.
+          bash tools/ci-run-tests.sh
           echo "=== qemu/smoke.sh ==="
           bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
 
@@ -207,7 +208,8 @@ jobs:
         run: |
           # Same suite as the release job, for the same reason: a partial
           # list means a guard that only ever runs on one machine.
-          echo "=== make test ==="
-          make test
+          # ci-run-tests.sh, not a bare `make test`: see the note in
+          # build.yml. A failing step whose log is empty is not a result.
+          bash tools/ci-run-tests.sh
           echo "=== qemu/smoke.sh ==="
           bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"

@@ -176,9 +176,13 @@ jobs:
             echo "FAIL: a workflow runs individual test scripts instead of 'make test':" >&2
             exit 1
           fi
-          # make test must actually be invoked, or the gate is vacuous.
-          if ! grep -qE '^\s+make test\s*$' .github/workflows/release.yml; then
-            echo "FAIL: release.yml does not run 'make test'" >&2
+          # The full suite must actually be invoked, or the gate is vacuous.
+          # Either a bare `make test` or the ci-run-tests.sh wrapper, which runs
+          # exactly that and additionally records the failing output - a failing
+          # step whose log comes back empty is not a usable result, and that is
+          # not hypothetical: run 37069902973 served a 0-byte log for both jobs.
+          if ! grep -qE '^\s+(make test|bash tools/ci-run-tests\.sh)\s*$' .github/workflows/release.yml; then
+            echo "FAIL: release.yml does not run the full suite (make test or ci-run-tests.sh)" >&2
             exit 1
           fi
           echo "release and build workflows run the full suite via make test: OK"
