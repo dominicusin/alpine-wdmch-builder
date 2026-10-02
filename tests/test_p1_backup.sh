@@ -105,6 +105,30 @@ right_path() { grep -q 'root/wdmch-fw-table-backup.bin' "$SRC"; }
 cond right_path
 check "the backup path is /root/wdmch-fw-table-backup.bin" "$rc"
 
+# Each refusal in install-alpine's header must exist in the code. The header
+# is the contract an operator reads before running the step that can erase a
+# firmware table, and it was found claiming things the code did not do.
+require_claim() {
+    if grep -qE "$2" rootfs/install-alpine; then rc=0; else rc=1; fi
+    check "$1" "$rc"
+}
+echo
+echo "install-alpine: the header's refusal list is enforced:"
+require_claim "refuses the rescue stick (mount table)"  'media/usb'
+require_claim "refuses the rescue stick (boot files)"  'rescue\.sata\.dtb'
+require_claim "refuses the rescue stick (factory GPT)" 'does not look like a WDMCH disk'
+require_claim "restricts writes to p19/p20"            'only p19 \(SYSTEM_A\) and p20'
+require_claim "a failed p1 backup aborts"              'Refusing to continue\. The firmware table'
+require_claim "a missing SSH key aborts"               'ERROR: no authorized_keys in the rescue image'
+require_claim "a missing kernel aborts"                'die "\$USB_ROOT/sata\.uImage not found'
+require_claim "a missing DTB aborts"                   'die "\$USB_ROOT/rescue\.sata\.dtb not found'
+
+# No dangling file references in the header an operator reads first.
+dangling=$(grep -oE 'README\.[a-z]+' rootfs/install-alpine | sort -u \
+           | while read -r r; do [ -f "$r" ] || echo "$r"; done)
+[ -z "$dangling" ]; rc=$?
+check "install-alpine header references no missing files${dangling:+ (dangling: $dangling)}" "$rc"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "p1 backup ordering and failure handling: PASSED"

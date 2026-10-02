@@ -21,19 +21,47 @@
 #     p18 (CONFIG) and the user's data in p22 / p24 are all left untouched.
 #
 # The vendor U-Boot cannot boot from the internal SATA disk at all - it only
-# reads boot files from a FAT32 USB stick. So the stick stays plugged in and
-# the rescue kernel pivots into the rootfs on p20 at boot. See README.kexec
+# reads boot files from a FAT32 USB stick. So the stick stays plugged in
+# and the rescue kernel pivots into the rootfs on p20 at boot. See README.md
 # and docs/RECOVERY.md.
+#
+# ---------------------------------------------------------------------------
+# WHAT REFUSES TO RUN
+# ---------------------------------------------------------------------------
+# This installer erases a firmware table it cannot restore, so every refusal
+# below is a hard stop, not a warning. Each one has an offline test in
+# tests/test_rescue_refusal.sh (22 cases) - this list is the contract those
+# tests enforce, not decoration.
+#
+#   * The rescue stick. On this hardware the USB stick claims /dev/sda, so a
+#     careless "install-alpine /dev/sda" would erase the very medium being
+#     booted from. Refused three independent ways: a partition of the target
+#     mounted at /media/usb; a FAT32 partition holding sata.uImage plus
+#     rescue.sata.dtb; and the factory-GPT probe, which a one-partition stick
+#     cannot pass. There is no --force for this on purpose.
+#   * Only p19 / p20 on a factory disk. Checked where the partition table is
+#     known, so p1 (FW_TABLE), the A/B/GOLD firmware slots, p18 (CONFIG) and
+#     the user's data in p22 / p24 cannot be selected even by typo.
+#   * No firmware-table backup means no install. p1 is read to /tmp BEFORE the
+#     first destructive write and a failed read aborts the run.
+#   * No SSH key means no install. There is no root password, so a system
+#     without a key cannot be reached at all.
+#   * No kernel or DTB means no install. A filesystem that cannot boot is not
+#     a successful installation.
 #
 # ---------------------------------------------------------------------------
 # WHAT HAPPENS HERE
 # ---------------------------------------------------------------------------
-#   1. verify the disk really is a WDMCH disk (factory GPT + p1/p18/p20)
-#   2. back up the firmware table (p1) onto the installed system
-#   3. mount p20, or mkfs.ext4 it (mke2fs is pulled from the stick on demand)
-#   4. apk add alpine-base from the offline repo on the stick
-#   5. copy Image + DTB into /boot, write fstab / network / console / SSH
+#   1. refuse everything above, then identify the disk and its partition table
+#   2. confirm interactively (unless --yes)
+#   3. back up the firmware table (p1) to /tmp - BEFORE the first write
+#   4. mount p20, or mkfs.ext4 it (mke2fs is pulled from the stick on demand)
+#   5. place the p1 backup on the target, install the base system from the
+#      offline repo, copy Image + DTB into /boot, write fstab / network /
+#      console / SSH
 #   6. install /usr/local/sbin/boot-full-alpine (optional kexec handoff)
+#   7. verify the result; /sbin/init is recreated if the package install
+#      did not create it
 #
 # Usage: install-alpine <disk> [--yes] [--root-part N]
 #   e.g. install-alpine /dev/sda
@@ -234,7 +262,7 @@ fi
 # ---------------------------------------------------------------------------
 # 2b. firmware table backup (p1) - BEFORE the first destructive write
 # ---------------------------------------------------------------------------
-# This belongs here. The header above describes it as step 2 and the release
+# This belongs here. The header above describes it as step 3 and the release
 # checklist says "backed up before any write", but it used to sit at step 5,
 # after mke2fs had already reformatted p20. A backup taken after the write it
 # was meant to precede is not a backup.
