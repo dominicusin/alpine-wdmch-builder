@@ -1,0 +1,38 @@
+# Measured on the real WDMCH, 2026-10-02, via SSH as dietpi@192.168.1.2.
+# Read-only: blkid and lsblk only. Nothing was written to this machine.
+#
+# This file is the fixture the in-use-partition test runs against. It is
+# recorded data, not a guess, and it is what makes the refusal test meaningful:
+# the synthetic indexes prove the logic, these values prove the logic matches
+# the machine the project is for.
+#
+# blkid -o export, one device per invocation.
+#
+#   sda19  LABEL="SWAP"    TYPE="swap"               PARTLABEL="SWAP"
+#   sda20  LABEL="(none):1" TYPE="linux_raid_member"  PARTLABEL="SYSTEM"
+#   sda21  LABEL="DATA"    TYPE="btrfs"              PARTLABEL="DATA"
+#
+# The one that matters:
+#
+#   sda20  UUID="dddddddd-1111-1111-1111-1111aaaaaaaa"
+#          TYPE="linux_raid_member"  PARTLABEL="SYSTEM"
+#          TYPE="swap"               PARTLABEL="SWAP"      <- sda19
+#
+# and /proc/mdstat:
+#
+#   md1 : active raid1 sda20[0]
+#         20954112 blocks super 1.2 [2/1] [U_]
+#
+# /dev/md1 is the root filesystem:
+#
+#   findmnt: /dev/md1 on /     ext4  LABEL=SYSTEM
+#   /          contains /nix /guix /etc/fido /var/spool/fido   5.9G used
+#   3 running fido units: fidonet-bbs, fidonet-inotify, fidonet-telegram
+#
+# [2/1] means the array expects two devices and has one. p20 SYSTEM_B is the
+# only member of the array backing the running root filesystem, so writing to
+# p20 would take the system with it.
+
+sda19  swap               SWAP     SWAP     [SWAP]
+sda20  linux_raid_member  (none):1 SYSTEM
+sda21  btrfs              DATA     DATA     /data
