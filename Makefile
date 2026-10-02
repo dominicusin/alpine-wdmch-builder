@@ -66,6 +66,7 @@ test: validate
 	bash tests/test_seams.sh
 	bash tests/test_syntax.sh
 	bash tests/test_prepare_usb.sh
+	bash tests/test_mutate.sh
 	bash tests/test_wdmch_layout.sh
 	bash tests/test_p1_backup.sh
 	bash tests/test_no_fail_open.sh

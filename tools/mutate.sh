@@ -35,8 +35,13 @@ if mode == "replace-block":
     # arg = "start_marker|||N|||replacement" - replaces N lines from the marker.
     # N matters: replacing only the `if` line of an if/fi leaves the whole body
     # behind, which looks like a successful mutation but is not the one intended.
-    marker, _, rest = arg.partition("|||")
-    count_s, _, repl = rest.partition("|||")
+    marker, sep, rest = arg.partition("|||")
+    if not sep:
+        sys.exit("BAD-ARG: replace-block needs MARKER|||N|||REPLACEMENT")
+    count_s, sep2, repl = rest.partition("|||")
+    if not sep2 or not count_s.isdigit():
+        sys.exit(f"BAD-ARG: replace-block needs MARKER|||N|||REPLACEMENT, "
+                 f"got N={count_s!r} - N must be digits")
     count = int(count_s)
     lines = src.split("\n")
     hits = [n for n, l in enumerate(lines) if marker in l]
