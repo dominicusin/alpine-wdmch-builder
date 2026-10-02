@@ -74,7 +74,25 @@ RUN="$W/run"
 sh -n "$RUN" || { echo "FAIL: the assembled policy is not valid shell" >&2; exit 1; }
 
 # keep_if_not_vendor <PARTLABEL> -> keep | skip, from 99-disk-root itself.
-keep_if_not_vendor() { sh "$RUN" "$1" 2>/dev/null | grep -q keep && echo keep || echo skip; }
+#
+# The verdict must be one of the two, or the run fails. A case that could only
+# ever print `skip` - because the policy script crashed, or because `sh` was
+# missing - would report every vendor slot as correctly rejected and say nothing
+# about why, which is the same silent-pass shape this repository keeps removing.
+# Errors are captured rather than discarded so a broken policy is diagnosed
+# instead of mistaken for a verdict.
+keep_if_not_vendor() {
+    verdict=$(sh "$RUN" "$1" 2>&1)
+    case "$verdict" in
+        keep) printf '%s\n' keep ;;
+        skip) printf '%s\n' skip ;;
+        *)
+            echo "keep_if_not_vendor: the assembled policy gave no verdict for '$1'" >&2
+            echo "  it said: ${verdict:-<nothing at all>}" >&2
+            return 1
+            ;;
+    esac
+}
 
 echo "=== handover: vendor slots must never be entered ==="
 
