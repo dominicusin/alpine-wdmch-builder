@@ -70,7 +70,7 @@ SA=$(lsblk -bndo SIZE "$DISK_A" 2>/dev/null || echo 0)
 SB=$(lsblk -bndo SIZE "$DISK_B" 2>/dev/null || echo 0)
 
 if [ "$SA" -gt 0 ] && [ "$SB" -gt 0 ] && [ "$SA" -lt "$SB" ]; then
-    info "asymmetric by $(numfmt --to=iec $((SB/SA))x - this is what rules out raid1"
+    info "asymmetric by $(numfmt --to=iec "$((SB/SA))")x - this is what rules out raid1"
 else
     bad "expected $DISK_A to be much smaller than $DISK_B; re-check the layout"
 fi
@@ -144,7 +144,7 @@ if echo "$ROOT_SRC" | grep -q md; then
 fi
 
 # --- 6. the plan -------------------------------------------------------------
-cat <<PLAN
+cat <<WDECH_PLAN_END
 
 PLAN
   0. VERIFY FIRST, from a rescue boot, before anything is written:
@@ -205,7 +205,7 @@ WHAT I CANNOT DO
   run, which is the correct division: I can plan and verify, and I will not
   create the filesystem that a failed boot would leave unrecoverable.
 
-PLAN
+WDECH_PLAN_END
 echo
 echo "==============================================================="
 if [ "$BAD" -eq 0 ]; then

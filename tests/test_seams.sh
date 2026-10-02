@@ -56,6 +56,15 @@ if [ -n "$leaks2" ]; then echo "$leaks2" | sed 's/^/        /'; fi
 VI=scripts/verify-install.sh
 check "verify-install exposes PARTS for the partition table" \
       "$(cond "grep -q 'parts=\${PARTS:-/proc/partitions}' '$VI'"; echo $?)"
+# The disk list is a glob with a bare default, so it does not match the seam
+# regex above. It is the other half of the same defect: a test that fakes the
+# partition table must also be able to say which disks exist, or the selection
+# runs against whatever hardware the host has.
+glob_leak=$(grep -nE 'for d in /dev/sd\?' "$VI" | grep -vE ':\s*#' || true)
+check "verify-install does not glob /dev/sd? directly" \
+      "$([ -z "$glob_leak" ] && echo 0 || echo 1)"
+if [ -n "$glob_leak" ]; then echo "$glob_leak" | sed 's/^/        /'; fi
+
 check "verify-install exposes DEVS for the disk list" \
       "$(cond "grep -q 'devs=\${DEVS:-}' '$VI'"; echo $?)"
 
@@ -75,7 +84,7 @@ files = subprocess.run(
      "tools/*.sh", "scripts/*.sh"],
     capture_output=True, text=True, cwd=root).stdout.split()
 
-seam_re = re.compile(r"\$\{([A-Z_]+):-(/proc/[a-z/]+)\}")
+seam_re = re.compile(r"\$\{([A-Z_]+):-(/(?:proc|dev|sys)/[a-z0-9_./?*-]+)\}")
 found = []
 declared = 0
 
@@ -95,8 +104,21 @@ for rel in files:
         continue
     declared += len(seams)
 
+    # Skip heredoc bodies. tools/plan-btrfs-migration.sh prints its plan inside
+    # `cat <<PLAN`, and the plan tells the operator to run
+    #     lsblk -f; cat /proc/mdstat; blkid /dev/sda20
+    # Those are instructions in a string, not reads by the script. A rule that
+    # cannot tell the two flags the documentation of the very tool it guards.
+    heredoc_end = None
     for n, line in enumerate(lines, 1):
         stripped = line.strip()
+        if heredoc_end is not None:
+            if stripped == heredoc_end:
+                heredoc_end = None
+            continue
+        m = re.search(r"<<-?\s*(['\"]?)(\w+)\1", line)
+        if m:
+            heredoc_end = m.group(2)
         if stripped.startswith("#"):
             continue
         for path, decl in seams.items():
@@ -106,6 +128,13 @@ for rel in files:
                     continue                      # inside a message
                 if f":-{path}" in line and n == decl:
                     continue                      # the declaration itself
+                # ...and not part of a line whose job is to PRINT something.
+                # tools/plan-btrfs-migration.sh spells out its own instructions:
+                #     echo "  lsblk -f; cat /proc/mdstat; blkid /dev/sda20"
+                # That is documentation telling the operator what to run. Only
+                # one heredoc exists in that file; the rest is echoed prose.
+                if re.match(r"^(echo|printf|warn|err|error|log|say|info)\b", stripped):
+                    continue
                 # Any UNQUOTED occurrence outside the declaration is a read.
                 # An earlier version required a redirection or pipe immediately
                 # before the path, which missed the commonest shape of all:
