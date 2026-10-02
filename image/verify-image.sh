@@ -28,18 +28,37 @@ else
 fi
 cd -
 
-# Verify uImage size (kernel + 512 KiB padding)
+# Verify uImage padding (kernel + exactly 512 KiB of zeros)
+#
+# This used to be wrapped in `if [ "$KERNEL_SIZE" -gt 0 ]`, so a missing
+# build/kernel/Image silently disabled the whole check and the script still
+# exited 0. Verified: with an empty kernel directory, "uImage padding" never
+# appeared in the output and the run passed. That is the same shape as the
+# closure bug - the run reported success without having checked the thing -
+# and the padding is load-bearing: it is what the vendor loader reads past the
+# kernel. So the size is now required, and the padding is held to its exact
+# length rather than "whatever the difference happens to be".
 UIMAGE_SIZE=$(stat -c '%s' "$RELEASE_DIR/sata.uImage")
 KERNEL_SIZE=$(stat -c '%s' "$BUILD_DIR/Image" 2>/dev/null || echo "0")
-if [ "$KERNEL_SIZE" -gt 0 ]; then
-    PADDING_SIZE=$((UIMAGE_SIZE - KERNEL_SIZE))
-    ZERO_BYTES=$(tail -c "$PADDING_SIZE" "$RELEASE_DIR/sata.uImage" | tr -d '\0' | wc -c)
-    if [ "$ZERO_BYTES" -eq 0 ]; then
-        echo "uImage padding is all zeros: OK"
-    else
-        echo "FAIL: uImage padding contains non-zero bytes" >&2
-        exit 1
-    fi
+if [ "$KERNEL_SIZE" -le 0 ]; then
+    echo "FAIL: $BUILD_DIR/Image is missing or empty, so the uImage padding" >&2
+    echo "      cannot be verified. Run the kernel build first; do not treat" >&2
+    echo "      this as a passing verification." >&2
+    exit 1
+fi
+EXPECTED_PADDING=524288
+PADDING_SIZE=$((UIMAGE_SIZE - KERNEL_SIZE))
+if [ "$PADDING_SIZE" -ne "$EXPECTED_PADDING" ]; then
+    echo "FAIL: uImage padding is $PADDING_SIZE bytes, expected $EXPECTED_PADDING" >&2
+    echo "      (uImage $UIMAGE_SIZE - Image $KERNEL_SIZE)" >&2
+    exit 1
+fi
+ZERO_BYTES=$(tail -c "$PADDING_SIZE" "$RELEASE_DIR/sata.uImage" | tr -d '\0' | wc -c)
+if [ "$ZERO_BYTES" -eq 0 ]; then
+    echo "uImage padding: $PADDING_SIZE bytes, all zeros: OK"
+else
+    echo "FAIL: uImage padding contains $ZERO_BYTES non-zero bytes" >&2
+    exit 1
 fi
 
 # Verify rescue rootfs size

@@ -26,14 +26,19 @@ run_dry_run() {
     echo "=== Dry run: validating configuration ==="
     echo "VERSION: ${VERSION}"
     echo ""
-    echo "Checking required tools..."
-    for tool in git make aarch64-linux-gnu-gcc ccache python3 dtc cpio gzip xz zip; do
-        if command -v "$tool" >/dev/null 2>&1; then
-            echo "  OK: $tool"
-        else
-            echo "  MISSING: $tool"
-        fi
-    done
+    # tools/check-deps.sh is the single owner of the dependency list. This used
+    # to be a second hand-written copy, and the two had already drifted: the
+    # copy here omitted curl and unzip while the build calls both unguarded.
+    # A list that exists twice is a list that is wrong once.
+    #
+    # check-deps.sh exits non-zero on a missing tool, so the dry run inherits
+    # that verdict rather than printing MISSING and carrying on to a green
+    # "All dry-run checks passed."
+    if ! bash tools/check-deps.sh; then
+        echo ""
+        echo "Dry run FAILED: required build tools are missing (see above)."
+        return 1
+    fi
     echo ""
     echo "Checking source locks..."
     for f in config/source-lock.env config/alpine.env; do
@@ -70,6 +75,15 @@ run_build() {
     echo "=== Building WDMCH rescue image ==="
     echo "VERSION: ${VERSION}"
 
+    # Fail on a missing tool before spending 30 minutes on a kernel build.
+    # check-deps.sh is the single owner of the list; run_dry_run calls the same
+    # script, so a dry run that passes means a real build will not stop here.
+    if ! bash tools/check-deps.sh; then
+        echo ""
+        echo "Build FAILED: required tools are missing (see above)." >&2
+        exit 1
+    fi
+    echo ""
     # Load optional build env
     if [ -f config/build.env ]; then
         set -a

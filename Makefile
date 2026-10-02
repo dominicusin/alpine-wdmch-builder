@@ -67,6 +67,7 @@ test: validate
 	bash tests/test_resolver.sh
 	bash tests/test_preflight.sh
 	bash tests/test_backup_fw.sh
+	bash tests/test_verifiers.sh
 	bash tests/test_workflows.sh
 	bash test-flash.sh
 
