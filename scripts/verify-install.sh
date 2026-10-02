@@ -22,6 +22,44 @@ pass() { echo "  OK    $*"; }
 fail() { echo "  FAIL  $*"; fails=$((fails + 1)); }
 warn() { echo "  WARN  $*"; }
 
+# How many PARTITIONS does a whole disk expose?
+#
+# /proc/partitions carries a line for the whole disk as well as one per
+# partition, so the suffix after the device name must be digits; counting the
+# bare device would report 25 for a 24-partition disk. The threshold passes
+# either way, but this number is shown to the operator and should be real.
+#
+# PARTS is overridable so the test can supply a partition table. The default is
+# the only value used on a real machine.
+count_partitions() {
+    local dev=${1##*/} parts
+    parts=${PARTS:-/proc/partitions}
+    awk -v dev="$dev" \
+        'index($4, dev) == 1 && substr($4, length(dev)+1) ~ /^[0-9]+$/ {n++} END{print n+0}' \
+        "$parts" 2>/dev/null || echo 0
+}
+
+# The internal disk is whichever sd? device has the most partitions.
+#
+# It used to be assumed to be sda. That is wrong in exactly the configuration
+# the project documents: 99-disk-root says the USB stick can stay plugged in,
+# and in the rescue environment the stick is the device that claims sda
+# (rootfs/init says so). With the stick present the internal disk enumerates as
+# sdb, sda holds the stick's one FAT32 partition, and the check reported
+# "the factory GPT was rewritten" on a perfectly correct installation - sending
+# the operator to RECOVERY.md to recover a machine that never broke.
+#
+# "Most partitions" is independent of enumeration order, of whether the stick is
+# plugged in, and of which letter the kernel assigned.
+select_internal_disk() {
+    local best="" bestn=0 d c
+    for d in /dev/sd?; do
+        c=$(count_partitions "$d")
+        if [ "$c" -gt "$bestn" ]; then bestn=$c; best="$d"; fi
+    done
+    printf '%s\n' "$best"
+}
+
 echo "=== WDMCH install verification (target: $TARGET) ==="
 if [ "$LIVE" -eq 0 ]; then
     echo "    offline mode: network checks are skipped"
@@ -81,13 +119,38 @@ if [ "$LIVE" -eq 1 ]; then
     # ---- 3. the factory partition table survived --------------------------
     echo
     echo "[partition table]"
-    n=$(awk '$4 ~ /^sda/ {c++} END{print c+0}' /proc/partitions 2>/dev/null || echo 0)
-    if [ "$n" -ge 20 ]; then
-        pass "internal disk exposes $n partitions (factory GPT preserved)"
-    elif [ "$n" -eq 0 ]; then
-        warn "no sda device in /proc/partitions"
+    # Count the disk that actually holds the root filesystem, not "sda".
+    #
+    # This used to count sda* unconditionally, which is wrong in exactly the
+    # configuration the project documents: 99-disk-root says "the USB stick can
+    # stay plugged in", and in the rescue environment the stick is the device
+    # that claims sda (rootfs/init says so explicitly). With the stick present,
+    # the internal disk enumerates as sdb, sda holds the stick's single FAT32
+    # partition, and this check reported
+    #     "internal disk exposes only 1 partitions - the factory GPT was rewritten"
+    # on a perfectly correct installation - sending the operator to RECOVERY.md
+    # to recover a machine that never broke.
+    #
+    # The internal disk is whichever sd? device has the most partitions. That is
+    # independent of enumeration order, of whether the stick is plugged in, and
+    # of which letter the kernel picked. Naming the disk in the output matters:
+    # the operator has to be able to see which device was inspected.
+    # Count only PARTITION entries. /proc/partitions also has a line for the
+    # whole disk ("  259 0 1953525168 sdb"), and counting that would report 25
+    # partitions for a 24-partition disk. The threshold passes either way, but
+    # the operator is shown this number and it should be the real one.
+    # Which disk is internal is decided by select_internal_disk, which is a
+    # function rather than inline code so tests/test_verify_install_gpt.sh can
+    # extract and run it. Inlining it here meant the test had to cut a range out
+    # of a half-open `if`, which is not a runnable shell fragment.
+    gpt_disk=$(select_internal_disk)
+    gpt_n=$(count_partitions "$gpt_disk")
+    if [ "$gpt_n" -ge 20 ]; then
+        pass "$gpt_disk exposes $gpt_n partitions (factory GPT preserved)"
+    elif [ "$gpt_n" -eq 0 ]; then
+        warn "no sd? device with partitions in /proc/partitions - cannot check the GPT"
     else
-        fail "internal disk exposes only $n partitions - the factory GPT was rewritten"
+        fail "largest disk $gpt_disk exposes only $gpt_n partitions - the factory GPT was rewritten"
     fi
 else
     echo
