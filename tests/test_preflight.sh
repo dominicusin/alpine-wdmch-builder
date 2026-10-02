@@ -119,7 +119,11 @@ check "preflight still exits 0 on a machine that is not a WDMCH" \
       "$(cond 'bash '"$PF"' >/dev/null 2>&1'; echo $?)"
 
 # --- the old hardcoded-sda bug must not come back ----------------------------
-if grep -qE '\[ -r /dev/sda \]|partx[^\n]*/dev/sda|sgdisk -p /dev/sda' "$PF"; then
+# Comments are excluded: the fix explains the old `-r /dev/sda` behaviour in
+# prose, and a grep that matched its own explanation would report a bug that is
+# not there - the same trap as the in-use guard's own mdstat pattern.
+if grep -vE '^[[:space:]]*#' "$PF" \
+   | grep -qE '\[ -r /dev/sda \]|partx[^\n]*/dev/sda|sgdisk -p /dev/sda'; then
     echo "  FAIL  preflight hardcodes /dev/sda again"
     FAILED=$((FAILED+1))
 else

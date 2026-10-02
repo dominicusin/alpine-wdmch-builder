@@ -42,6 +42,12 @@
 #   * Only p19 / p20 on a factory disk. Checked where the partition table is
 #     known, so p1 (FW_TABLE), the A/B/GOLD firmware slots, p18 (CONFIG) and
 #     the user's data in p22 / p24 cannot be selected even by typo.
+#   * A partition that is already in use. Measured on a real WDMCH on
+#     2026-10-02: p20 (PARTLABEL "SYSTEM") was the only member of a degraded
+#     RAID1 array, and that array was the root filesystem. Formatting it would
+#     have destroyed the running system, and none of the guards below would
+#     have stopped it. Any existing filesystem that is not ext4, or any
+#     partition named in /proc/mdstat, is refused.
 #   * No firmware-table backup means no install. p1 is read to /tmp BEFORE the
 #     first destructive write and a failed read aborts the run.
 #   * No SSH key means no install. There is no root password, so a system
@@ -238,6 +244,65 @@ fi
 
 ROOT_DEV="${DISK}${ROOT_PART}"
 [ "$has_gpt" = "1" ] || ROOT_DEV="${DISK}1"
+
+# --- refuse a partition that is already in use -------------------------------
+# The allowlist above says WHERE we may write; it does not say the target is
+# free. It is not.
+#
+# Measured on the real WDMCH on 2026-10-02: p20 (PARTLABEL "SYSTEM") is not an
+# empty vendor slot. It is the only member of a degraded RAID1 array
+#
+#     md1 : active raid1 sda20[0]   20954112 blocks  [2/1] [U_]
+#
+# and /dev/md1 is the ROOT FILESYSTEM - a Nix/Guix system running a FidoNet
+# node, 5.9 GB used. Running this installer as designed would have mkfs.ext4'd
+# the only member of the array backing the running system. None of the existing
+# guards would have stopped it: the factory GPT is intact, p20 is on the
+# allowlist, and it is not the rescue stick.
+#
+# "Only p20 is ever written" was a safety claim, and it was false. This is the
+# guard that makes it true. It does not change behaviour on a pristine box,
+# where p20 is empty or ext4 and blkid says so.
+if [ -b "$ROOT_DEV" ]; then
+    cur_type=""
+    if command -v blkid >/dev/null 2>&1; then
+        cur_type=$(blkid -s TYPE -o value "$ROOT_DEV" 2>/dev/null || true)
+    fi
+    # 0xfd is the Linux RAID auto-detect type. On a factory WDMCH p20 carries
+    # no filesystem signature at all, so anything with a type is a partition
+    # somebody is already using.
+    if [ -n "$cur_type" ] && [ "$cur_type" != "ext4" ]; then
+        echo "ERROR: $ROOT_DEV already holds a '$cur_type' filesystem." >&2
+        echo "       This installer creates a new ext4 filesystem and would" >&2
+        echo "       destroy it without a word." >&2
+        if [ "$cur_type" = "linux_raid_member" ]; then
+            echo "" >&2
+            echo "       This is the RAID case seen on a real WDMCH: p20 was the" >&2
+            echo "       only member of a degraded RAID1 array whose md device was" >&2
+            echo "       the root filesystem. Formatting it would have taken the" >&2
+            echo "       running system with it." >&2
+        fi
+        echo "" >&2
+        echo "       Check what is using it:" >&2
+        echo "         blkid $ROOT_DEV ; cat /proc/mdstat ; lsblk -f" >&2
+        echo "       Nothing here is worth the risk. Stop and read" >&2
+        echo "       docs/RECOVERY.md before doing anything to this disk." >&2
+        exit 1
+    fi
+    # Belt and braces: an active md array naming this device at all.
+    #
+    # /proc/mdstat writes a member as "<dev>[<index>]", e.g.
+    #     md1 : active raid1 sda20[0]
+    # The first version of this pattern required the member to be preceded by
+    # "[N] ", which is not how mdstat is formatted, so it matched nothing and
+    # the safety net never fired. Verified against the line quoted above.
+    if [ -r /proc/mdstat ] && grep -qE "${DISK##*/}${ROOT_PART}\[[0-9]+\]" /proc/mdstat 2>/dev/null; then
+        echo "ERROR: $ROOT_DEV is an active md array member:" >&2
+        echo "       $(grep -E "${DISK##*/}${ROOT_PART}\[" /proc/mdstat | head -1)" >&2
+        echo "       Refusing to write to it." >&2
+        exit 1
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # 2. confirmation

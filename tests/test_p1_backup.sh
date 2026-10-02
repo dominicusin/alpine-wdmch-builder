@@ -119,6 +119,8 @@ require_claim "refuses the rescue stick (boot files)"  'rescue\.sata\.dtb'
 require_claim "refuses the rescue stick (factory GPT)" 'does not look like a WDMCH disk'
 require_claim "restricts writes to p19/p20"            'only p19 \(SYSTEM_A\) and p20'
 require_claim "a failed p1 backup aborts"              'Refusing to continue\. The firmware table'
+require_claim "a target already in use aborts"          "already holds a .* filesystem"
+require_claim "an active md member aborts"              'is an active md array member'
 require_claim "a missing SSH key aborts"               'ERROR: no authorized_keys in the rescue image'
 require_claim "a missing kernel aborts"                'die "\$USB_ROOT/sata\.uImage not found'
 require_claim "a missing DTB aborts"                   'die "\$USB_ROOT/rescue\.sata\.dtb not found'

@@ -86,13 +86,25 @@ sec "2. THE decisive question: how big is p20 SYSTEM_B?"
 # The installer writes only here. If the target system does not fit, no
 # later step matters and the whole approach has to be reconsidered.
 echo "  rescue stick    : ${STICK_DISK:-none detected}"
-echo "  internal disk   : ${INTERNAL_DISK:-NONE FOUND - nothing else below is reliable}"
+echo "  internal disk   : ${INTERNAL_DISK:-NONE FOUND - nothing below is reliable}"
 echo
+# lsblk draws partitions with a tree prefix ("├─sda1", "└─sda24"), so the
+# device name is NOT the first field. Matching on $1 found nothing and the
+# entire partition table was suppressed - which is exactly the table this
+# section exists to print. Measured on the WDMCH: the only line shown was the
+# whole disk, and the operator was left to guess.
 if command -v lsblk >/dev/null 2>&1; then
     lsblk -b -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null \
-        | awk -v d="${INTERNAL_DISK#/dev/}" \
-              'NR==1 || $1 == d || index($1, d) == 1 && substr($1, length(d)+1) ~ /^[0-9]+$/ \
-               {printf "  %-10s %14s  %-8s %-10s %-12s %s\n", $1,$2,$3,$4,$5,$6}'
+        | awk -v d="${INTERNAL_DISK#/dev/}" '
+            # Strip the tree prefix. lsblk draws "├─sda1" with U+251C U+2500,
+            # which is three bytes each in UTF-8, so matching specific bytes is
+            # fragile; removing every leading non-alphanumeric works whatever
+            # the encoding and whatever the terminal emits.
+            function name(f) { gsub(/^[^A-Za-z0-9]+/, "", f); return f }
+            NR == 1 { printf "  %-10s %14s  %-8s %-10s %-12s %s\n", $1,$2,$3,$4,$5,$6; next }
+            { n = name($1)
+              if (n == d || (index(n, d) == 1 && substr(n, length(d)+1) ~ /^[0-9]+$/))
+                  printf "  %-10s %14s  %-8s %-10s %-12s %s\n", n,$2,$3,$4,$5,$6 }'
 else
     echo "  lsblk unavailable; raw partition sizes:"
     cat /proc/partitions 2>/dev/null | sed 's/^/  /'
@@ -100,8 +112,17 @@ fi
 echo
 echo "  NOTE: partx is read-only and does not need root, so it is the"
 echo "        most reliable way to see p20 when lsblk is unavailable."
-if command -v partx >/dev/null 2>&1 && [ -n "${INTERNAL_DISK:-}" ] && [ -r "$INTERNAL_DISK" ]; then
-    partx --show --bytes "$INTERNAL_DISK" 2>/dev/null | grep -E ':(19|20|21):' | sed 's/^/  /'
+# -b, not -r. /dev/sda is root:disk 0660, so for the unprivileged user this
+# inventory is meant for, `[ -r /dev/sda ]` is FALSE even though the disk is
+# right there - and section 3 then reported "no readable internal disk" on a
+# machine with a perfectly intact factory GPT. Measured, not reasoned.
+if command -v partx >/dev/null 2>&1 && [ -n "${INTERNAL_DISK:-}" ] && [ -b "$INTERNAL_DISK" ]; then
+    # `|| true` is load-bearing. The script runs under `set -Eeuo pipefail`, and
+    # on a disk that has no partitions 19-21 grep exits 1 - which killed the
+    # whole inventory. It was invisible before because the old `-r` test was
+    # false for an unprivileged user, so this block never ran at all. A
+    # read-only inventory must not abort because a filter matched nothing.
+    partx --show --bytes "$INTERNAL_DISK" 2>/dev/null | grep -E ':(19|20|21):' | sed 's/^/  /' || true
 fi
 echo
 # The verdict, stated rather than left for the operator to spot in a table of
@@ -110,6 +131,10 @@ echo
 P20_BYTES=$(lsblk -bndo SIZE "${INTERNAL_DISK}20" 2>/dev/null | head -1 || true)
 if [ -n "${P20_BYTES:-}" ] && [ "$P20_BYTES" -gt 0 ] 2>/dev/null; then
     echo "  VERDICT: p20 SYSTEM_B = $((P20_BYTES / 1024 / 1024)) MiB on ${INTERNAL_DISK}20"
+    if [ ! -r "$INTERNAL_DISK" ]; then
+        echo "           (the disk is present but not readable without root;"
+        echo "            the sizes above come from the kernel, which is enough.)"
+    fi
 else
     echo "  VERDICT: NO p20 (${INTERNAL_DISK:-no disk}20) FOUND."
     echo "           If this machine is not a WDMCH, stop here. If it is, the"
@@ -119,8 +144,16 @@ fi
 sec "3. Factory partition table: is it intact?"
 # The installer's safety property is that it never rewrites this table.
 # Capturing it now gives an exact before/after comparison.
-if [ -z "${INTERNAL_DISK:-}" ] || [ ! -r "$INTERNAL_DISK" ]; then
-    echo "  (no readable internal disk; ${STICK_DISK:-no stick} is not it)"
+if [ -z "${INTERNAL_DISK:-}" ] || [ ! -b "$INTERNAL_DISK" ]; then
+    echo "  (no internal disk found; ${STICK_DISK:-no rescue stick} is not it)"
+elif [ ! -r "$INTERNAL_DISK" ]; then
+    # Present, but this user cannot read it. Say exactly that - the previous
+    # wording claimed no disk was found, which is false and alarming.
+    echo "  ${INTERNAL_DISK} is present but not readable without root."
+    echo "  Re-run under sudo to dump the table:"
+    echo "      sudo sgdisk -p ${INTERNAL_DISK}"
+    echo "  (the partition count in section 2 already comes from the kernel and"
+    echo "   does not need root, so the factory table can be judged from there.)"
 elif command -v sgdisk >/dev/null 2>&1; then
     sgdisk -p "$INTERNAL_DISK" 2>/dev/null | sed 's/^/  /'
 elif command -v parted >/dev/null 2>&1; then
