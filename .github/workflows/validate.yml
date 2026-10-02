@@ -210,7 +210,28 @@ jobs:
           # This file is excluded so the guard cannot match its own pattern,
           # and comment lines are dropped: documenting the contract is not
           # re-implementing it.
-          bad=$(grep -rnE "unpack_from|0xd00dfeed|0x644D5241|0x91005A4D" \
+          #
+          # Markdown is scanned too. docs/DEBUGGING.md carries a deliberate
+          # standalone copy of the header parse, because the operator may be
+          # holding a bare stick with no repo checkout - that is a real
+          # situation, not a hypothetical one, so the copy earns its place. It
+          # is registered as an exception rather than left invisible, so a
+          # second copy elsewhere in the documentation is still caught and this
+          # one is a decision on record rather than an oversight.
+          #
+          # The value of scanning .md is that a drifted parser in a document is
+          # the worst kind: it is the copy a tired operator pastes, and nothing
+          # ever executes it. This one currently matches tools/ exactly.
+          #
+          # Markdown gets a NARROWER pattern, and the first attempt at this
+          # proved why. Scanning .md for the magic values flagged four files
+          # that merely STATE the contract - RELEASE_CHECKLIST.md, SOURCES.md,
+          # architecture.md and usb-rescue.md all list the expected code0,
+          # text_offset and pe_offset, which is exactly what a checklist is
+          # for. Re-implementing a parse and documenting its result are
+          # different acts. In prose only `unpack_from` means somebody wrote
+          # code, so that is the only token markdown is held to.
+          bad_code=$(grep -rnE "unpack_from|0xd00dfeed|0x644D5241|0x91005A4D" \
                   --include='*.sh' --include='*.yml' . \
                   --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
                 | grep -v '^\./\.github/workflows/validate\.yml' \
@@ -218,6 +239,10 @@ jobs:
                 | grep -vE 'tools/check-image-header\.py|tools/check-fdt\.py' \
                 | grep -vE "unpack_from\('<I', b, 56\)|Bad ARM64 magic" \
                 | grep -vE '^\./tests/test_dtb\.sh:' || true)
+          bad_docs=$(grep -rn "unpack_from" --include='*.md' . \
+                --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
+                | grep -v '^\./docs/DEBUGGING\.md:' || true)
+          bad="$bad_code$bad_docs"
           if [ -n "$bad" ]; then
             echo "FAIL: a file re-implements a header check that tools/ already owns." >&2
             echo "Call tools/check-image-header.py or tools/check-fdt.py instead." >&2

@@ -116,10 +116,14 @@ tail -c 524288 /mnt/stick/sata.uImage | tr -d '\0' | wc -c
 # must print 0
 ```
 
-**Check memory in the boot log.** The DTB declares 1 GiB at `0x40000000`. If
-`dmesg` reports a different total, the DTB is wrong or not being loaded — a
-mismatched DTB can also panic at a random later address rather than failing
-early.
+**Check memory in the boot log.** The DTB gives memory a base address of
+`0x40000000` and **no size cell** — `reg = <0x00 0x40000000>` — so the size is
+whatever the bootloader reports, not something the tree fixes. Read the actual
+figure from the kernel's `Memory:` line rather than expecting a particular
+total: a board with different DRAM prints a different number, and a `Memory:`
+line that disagrees with the hardware means the DTB is wrong or not being
+loaded. A mismatched DTB can also panic at a random later address rather than
+failing early.
 
 **Check the initramfs is intact**, not just present:
 
