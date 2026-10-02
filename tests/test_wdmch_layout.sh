@@ -53,18 +53,27 @@ blkid_type() { awk -v d="$1" '$1 == d { print $2 }' "$FIXTURE"; }
 # the -b precondition, and the path to the md table. The decision logic is the
 # installer's, untouched.
 GUARD="$W/guard"
-sed -n '/^# --- refuse a partition that is already in use/,/^fi$/p' "$SCRIPT" > "$GUARD"
+sed -n '/^refuse_in_use_partitions() {/,/^}$/p' "$SCRIPT" > "$GUARD"
 grep -q 'cur_type' "$GUARD" || { echo "FAIL: guard not found in $SCRIPT" >&2; exit 1; }
-sed -e 's|^if \[ -b "\$ROOT_DEV" \]; then$|if true; then|' \
-    -e "s|/proc/mdstat|\$MDSTAT_PATH|g" "$GUARD" > "$W/g2"
+sed -e 's@^    \[ -b "\$dev" \] || continue$@    :@' \
+    -e "s@/proc/mdstat@\$MDSTAT_PATH@g" "$GUARD" > "$W/g2"
 cat > "$W/harness" <<'HARNESS'
-blkid() { [ "${1:-}" = "-s" ] && { printf '%s' "$FAKE_TYPE"; return 0; }; return 1; }
+blkid() {
+    case "$2" in
+        TYPE)  printf '%s' "$FAKE_TYPE" ;;
+        LABEL) printf '%s' "$FAKE_LABEL" ;;
+        *) return 1 ;;
+    esac
+    return 0
+}
 HARNESS
 
 refuse() { # $1 = partition number ; echoes the guard's output, returns its exit
-    FAKE_TYPE="$(blkid_type "sda$1")" MDSTAT_PATH="$W/mdstat" \
-    ROOT_DEV="/dev/sda$1" DISK=/dev/sda ROOT_PART="$1" \
-    sh -c '. "$1"; . "$2"; eval "$(cat "$3")"' sh "$W/harness" "$GUARD" "$W/g2" 2>&1
+    FAKE_TYPE="$(blkid_type "sda$1")" FAKE_LABEL="${FAKE_LABEL:-}" MDSTAT_PATH="$W/mdstat" \
+    ROOT_LABEL="wdmch-root" SINGLE_DEV=0 \
+    ROOT_DEV="/dev/sda$1" DATA_DEV="/dev/sda21" DISK=/dev/sda ROOT_PART="$1" \
+    FS_DEVS="/dev/sda$1 /dev/sda21" \
+    sh -c '. "$1"; . "$2"; refuse_in_use_partitions' sh "$W/harness" "$W/g2" 2>&1
 }
 
 echo "=== the real WDMCH layout (measured 2026-10-02) ==="
@@ -88,9 +97,9 @@ check "  ...naming the measured type" \
       "$(cond 'echo "$out" | grep -q "\(swap\)"'; echo $?)"
 
 # --- and the mdstat net catches p20 even if blkid were silent ---------------
-out=$(FAKE_TYPE="" MDSTAT_PATH="$W/mdstat" ROOT_DEV=/dev/sda20 \
-      DISK=/dev/sda ROOT_PART=20 \
-      sh -c '. "$1"; . "$2"; eval "$(cat "$3")"' sh "$W/harness" "$GUARD" "$W/g2" 2>&1); rc=$?
+out=$(FAKE_TYPE="" FAKE_LABEL="" ROOT_LABEL="wdmch-root" SINGLE_DEV=0 MDSTAT_PATH="$W/mdstat" ROOT_DEV=/dev/sda20 \
+      DISK=/dev/sda ROOT_PART=20 FS_DEVS="/dev/sda20 /dev/sda21" \
+      sh -c '. "$1"; . "$2"; refuse_in_use_partitions' sh "$W/harness" "$W/g2" 2>&1); rc=$?
 check "p20 is refused from mdstat alone, with no blkid type" \
       "$(cond '[ $rc -ne 0 ]'; echo $?)"
 check "  ...and quotes the mdstat line it found" \

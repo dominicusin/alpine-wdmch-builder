@@ -42,20 +42,24 @@ echo "=== p1 firmware table backup: ordering and failure handling ==="
 echo
 
 backup_line=$(grep -n 'backing up the firmware table' "$SRC" | head -1 | cut -d: -f1)
-mke2fs_line=$(grep -n 'run_mke2fs "$ROOT_DEV" || die' "$SRC" | head -1 | cut -d: -f1)
+# The filesystem is created by run_mkbtrfs now; the property under test is the
+# same one - the p1 read happens before the target is formatted at all - and the
+# marker just has to name whatever actually creates the filesystem.
+mke2fs_line=$(grep -n 'run_mkbtrfs "$ROOT_DEV" || die' "$SRC" | head -1 | cut -d: -f1)
 fdisk_line=$(grep -n "fdisk \"\$DISK\"" "$SRC" | head -1 | cut -d: -f1)
 place_line=$(grep -n 'firmware table backup placed at' "$SRC" | head -1 | cut -d: -f1)
 
 echo "  p1 read: line ${backup_line:-?}"
-echo "  mke2fs : line ${mke2fs_line:-?}"
+echo "  btrfs  : line ${mke2fs_line:-?}"
 echo "  fdisk  : line ${fdisk_line:-?}"
 echo "  placed : line ${place_line:-?}"
 echo
 
 # 1. The read must precede every destructive write.
 before_mke2fs() { [ -n "$backup_line" ] && [ -n "$mke2fs_line" ] && [ "$backup_line" -lt "$mke2fs_line" ]; }
+[ -n "$mke2fs_line" ] || { echo "FAIL: no filesystem-creation marker found in install-alpine" >&2; exit 1; }
 cond before_mke2fs
-check "p1 is read before mke2fs formats the target" "$rc"
+check "p1 is read before the btrfs formats the target" "$rc"
 
 if [ -n "$fdisk_line" ]; then
     before_fdisk() { [ "$backup_line" -lt "$fdisk_line" ]; }
@@ -117,7 +121,8 @@ echo "install-alpine: the header's refusal list is enforced:"
 require_claim "refuses the rescue stick (mount table)"  'media/usb'
 require_claim "refuses the rescue stick (boot files)"  'rescue\.sata\.dtb'
 require_claim "refuses the rescue stick (factory GPT)" 'does not look like a WDMCH disk'
-require_claim "restricts writes to p19/p20"            'only p19 \(SYSTEM_A\) and p20'
+require_claim "restricts writes to p19/p20/p21"        'Only p19 \(SYSTEM_A\), p20 \(SYSTEM_B\) and p21 \(DATA\)'
+require_claim "both btrfs members are allowlisted"       'for part in \$ROOT_PART \$DATA_PART'
 require_claim "a failed p1 backup aborts"              'Refusing to continue\. The firmware table'
 require_claim "a target already in use aborts"          "already holds a .* filesystem"
 require_claim "an active md member aborts"              'is an active md array member'

@@ -114,7 +114,11 @@ NEVER=0
 # over to) and NO /sbin/ifup (the `networking` service has nothing to call).
 # busybox-ifupdown, which the resolver reaches through the ifupdown-any
 # virtual, is a 1.2 KB placeholder package that ships no binaries at all.
-SEEDS=(alpine-base openrc-init ifupdown-ng dropbear e2fsprogs kexec-tools)
+# btrfs-progs is required now: install-alpine creates ONE btrfs across p20
+# and p21, and mkfs.btrfs is not in busybox. It is unpacked from this offline
+# repo at install time, exactly as e2fsprogs is. Omitting it here would
+# have produced a stick that cannot create the filesystem it exists for.
+SEEDS=(alpine-base openrc-init ifupdown-ng dropbear e2fsprogs kexec-tools btrfs-progs)
 
 log "=== Resolving dependency closure for: ${SEEDS[*]} ==="
 CLOSURE=$(python3 image/resolve-deps.py --tsv \

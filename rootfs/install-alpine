@@ -39,15 +39,22 @@
 #     mounted at /media/usb; a FAT32 partition holding sata.uImage plus
 #     rescue.sata.dtb; and the factory-GPT probe, which a one-partition stick
 #     cannot pass. There is no --force for this on purpose.
-#   * Only p19 / p20 on a factory disk. Checked where the partition table is
-#     known, so p1 (FW_TABLE), the A/B/GOLD firmware slots, p18 (CONFIG) and
-#     the user's data in p22 / p24 cannot be selected even by typo.
+#   * Only p19 / p20 / p21 on a factory disk. BOTH members of the btrfs are
+#     checked; naming p20 and slipping p9 past as the second slot would defeat
+#     the allowlist entirely. Checked where the partition table is known, so p1
+#     (FW_TABLE), the A/B/GOLD firmware slots, p18 (CONFIG) and the user's data
+#     in p22 / p24 cannot be selected even by typo.
 #   * A partition that is already in use. Measured on a real WDMCH on
 #     2026-10-02: p20 (PARTLABEL "SYSTEM") was the only member of a degraded
 #     RAID1 array, and that array was the root filesystem. Formatting it would
 #     have destroyed the running system, and none of the guards below would
-#     have stopped it. Any existing filesystem that is not ext4, or any
-#     partition named in /proc/mdstat, is refused.
+#     have stopped it.
+#
+#     EVERY member is probed, not just the first - p21 on that machine holds
+#     /nix, /guix and every other subvolume of the running system. Any partition
+#     named in /proc/mdstat is refused. ext4 and btrfs pass only when labelled
+#     $ROOT_LABEL, which is what tells a previous install of this one apart from
+#     somebody else's data.
 #   * No firmware-table backup means no install. p1 is read to /tmp BEFORE the
 #     first destructive write and a failed read aborts the run.
 #   * No SSH key means no install. There is no root password, so a system
@@ -61,7 +68,7 @@
 #   1. refuse everything above, then identify the disk and its partition table
 #   2. confirm interactively (unless --yes)
 #   3. back up the firmware table (p1) to /tmp - BEFORE the first write
-#   4. mount p20, or mkfs.ext4 it (mke2fs is pulled from the stick on demand)
+#   4. create ONE btrfs spanning p20 + p21 - no md anywhere
 #   5. place the p1 backup on the target, install the base system from the
 #      offline repo, copy Image + DTB into /boot, write fstab / network /
 #      console / SSH
@@ -69,7 +76,26 @@
 #   7. verify the result; /sbin/init is recreated if the package install
 #      did not create it
 #
-# Usage: install-alpine <disk> [--yes] [--root-part N]
+# THE TARGET IS ONE BTRFS SPANNING p20 + p21
+#   p20 (SYSTEM_B) is 20 GB and p21 (DATA) is 7.3 TB. They are joined into a
+#   single btrfs filesystem. No md RAID is created and none is assembled.
+#
+#   Data profile single, metadata dup - forced by the sizes. Any REDUNDANT data
+#   profile is capped by the smallest device, so raid1 across 20 GB + 7.3 TB
+#   yields 20 GB usable: the whole of the small disk, and not enough for the
+#   system. `single` uses both devices in full; `dup` keeps the metadata - the
+#   part whose loss is silent - in two copies. Losing a device then degrades the
+#   filesystem rather than destroying it, which is what raid0 would do.
+#
+#   The system lives in the TOP-LEVEL subvolume, deliberately. A multi-device
+#   btrfs mounts through any one of its members, and at the top level the
+#   filesystem label alone identifies it, so neither fstab nor the boot handover
+#   has to resolve a subvolume. btrfs-progs is unpacked from the offline repo on
+#   the stick as e2fsprogs is, and the rescue kernel needs CONFIG_BTRFS_FS built
+#   in because the initramfs ships no modules.
+#
+# Usage: install-alpine <disk> [--yes] [--root-part N] [--data-part N]
+#                              [--single-dev] [--blank]
 #   e.g. install-alpine /dev/sda
 #        install-alpine /dev/sda --yes
 #        install-alpine /dev/sda --root-part 19      # use SYSTEM_A instead
@@ -80,6 +106,22 @@ set -u
 DISK=""
 ASSUME_YES=""
 ROOT_PART=20
+# The second btrfs member. p21 (DATA) is 7.3 TB against p20's 20 GB; together
+# they give a usable filesystem larger than either, with metadata duplicated
+# across both. --single-dev falls back to p20 alone.
+DATA_PART=21
+SINGLE_DEV=0
+# Data profile single, metadata dup. Any REDUNDANT data profile is capped by the
+# smallest device: raid1 across 20 GB + 7.3 TB yields 20 GB usable, which is
+# exactly the small disk and nothing more. `single` uses both devices fully;
+# `dup` keeps the metadata - the part whose loss is silent - in two copies.
+BTRFS_DATA_PROFILE=single
+BTRFS_META_PROFILE=dup
+# The system goes in the top-level subvolume (id 5). A named subvolume would
+# mean the handoff must resolve a subvolume as well as a device; at the top
+# level the filesystem label alone identifies the system, which is what findfs
+# returns and what fstab can name.
+BTRFS_SUBVOL=/
 BLANK_DISK=0
 
 ROOT_LABEL="wdmch-root"
@@ -87,11 +129,15 @@ ROOT_LABEL="wdmch-root"
 # ---------------------------------------------------------------------------
 usage() {
     cat <<'EOF'
-usage: install-alpine <disk> [--yes] [--root-part N] [--blank]
+usage: install-alpine <disk> [--yes] [--root-part N] [--data-part N]
+                    [--single-dev] [--blank]
 
   <disk>          whole disk node, e.g. /dev/sda (never a partition node)
 
-  --root-part N   partition to install into (default: 20 = SYSTEM_B)
+  --root-part N   first btrfs member (default: 20 = SYSTEM_B)
+  --data-part N   second btrfs member (default: 21 = DATA). Both are joined
+                  into ONE btrfs spanning p20 + p21. No md is involved.
+  --single-dev    use --root-part alone instead of a two-device btrfs
   --blank         disk has no factory WDMCH GPT: create one ext4 partition
   --yes           do not ask for confirmation
 
@@ -105,6 +151,9 @@ while [ $# -gt 0 ]; do
         --yes|-y)     ASSUME_YES=1; shift ;;
         --root-part)  ROOT_PART="$2"; shift 2 ;;
         --root-part=*) ROOT_PART="${1#--root-part=}"; shift ;;
+        --data-part)  DATA_PART="$2"; shift 2 ;;
+        --data-part=*) DATA_PART="${1#--data-part=}"; shift ;;
+        --single-dev) SINGLE_DEV=1; shift ;;
         --blank)      BLANK_DISK=1; shift ;;
         -h|--help)    usage; exit 0 ;;
         -*)           echo "ERROR: unknown option $1" >&2; usage >&2; exit 1 ;;
@@ -231,21 +280,35 @@ fi
 # here, where the partition table is already known, not behind a filesystem
 # probe.
 if [ "$has_gpt" = "1" ] && [ "$BLANK_DISK" = "0" ]; then
-    case "$ROOT_PART" in
-        19|20) : ;;
-        *) echo "ERROR: refusing to write partition $ROOT_PART." >&2
-           echo "       On the factory table only p19 (SYSTEM_A) and p20" >&2
-           echo "       (SYSTEM_B) may be written. p1 holds the firmware table," >&2
-           echo "       p2-p9 the A/B/GOLD firmware slots, p18 CONFIG, and" >&2
-           echo "       p22/p24 hold user data." >&2
-           exit 1 ;;
-    esac
+    # Both members of the btrfs have to be on the allowlist, not just the
+    # first. Naming p20 and slipping p9 past in the second slot would defeat
+    # the entire point of the allowlist.
+    for part in $ROOT_PART $DATA_PART; do
+        [ "$SINGLE_DEV" = "1" ] && [ "$part" = "$DATA_PART" ] && break
+        case "$part" in
+            19|20|21) : ;;
+            *) echo "ERROR: refusing to write partition $part." >&2
+               echo "       Only p19 (SYSTEM_A), p20 (SYSTEM_B) and p21 (DATA)" >&2
+               echo "       may be written. p1 holds the firmware table, p2-p9 the" >&2
+               echo "       A/B/GOLD firmware slots, p18 CONFIG, p22/p24 user data." >&2
+               exit 1 ;;
+        esac
+    done
 fi
 
 ROOT_DEV="${DISK}${ROOT_PART}"
-[ "$has_gpt" = "1" ] || ROOT_DEV="${DISK}1"
+DATA_DEV="${DISK}${DATA_PART}"
+[ "$has_gpt" = "1" ] || DATA_DEV=""
+[ "$SINGLE_DEV" = "1" ] && DATA_DEV=""
+# The members the filesystem will be created on, in order.
+FS_DEVS="$ROOT_DEV"
+[ -n "$DATA_DEV" ] && FS_DEVS="$ROOT_DEV $DATA_DEV"
 
 # --- refuse a partition that is already in use -------------------------------
+# A function, not inline code, so tests can extract and execute it exactly
+# rather than slicing a range out of the middle of a script. Slicing broke
+# twice as this block grew.
+refuse_in_use_partitions() {
 # The allowlist above says WHERE we may write; it does not say the target is
 # free. It is not.
 #
@@ -262,33 +325,52 @@ ROOT_DEV="${DISK}${ROOT_PART}"
 #
 # "Only p20 is ever written" was a safety claim, and it was false. This is the
 # guard that makes it true. It does not change behaviour on a pristine box,
-# where p20 is empty or ext4 and blkid says so.
-if [ -b "$ROOT_DEV" ]; then
+# where the partitions are empty or carry our own label and blkid says so.
+#
+# EVERY member is checked, not just the first. With two devices in play, a guard
+# that looked only at p20 would have happily formatted p21 - on the measured
+# machine the partition holding every subvolume of the running system, /nix and
+# /guix included - while cheerfully reporting that it had protected p20.
+for dev in $FS_DEVS; do
+    [ -b "$dev" ] || continue
     cur_type=""
+    cur_label=""
     if command -v blkid >/dev/null 2>&1; then
-        cur_type=$(blkid -s TYPE -o value "$ROOT_DEV" 2>/dev/null || true)
+        cur_type=$(blkid -s TYPE -o value "$dev" 2>/dev/null || true)
+        cur_label=$(blkid -s LABEL -o value "$dev" 2>/dev/null || true)
     fi
-    # 0xfd is the Linux RAID auto-detect type. On a factory WDMCH p20 carries
-    # no filesystem signature at all, so anything with a type is a partition
-    # somebody is already using.
-    if [ -n "$cur_type" ] && [ "$cur_type" != "ext4" ]; then
-        echo "ERROR: $ROOT_DEV already holds a '$cur_type' filesystem." >&2
-        echo "       This installer creates a new ext4 filesystem and would" >&2
-        echo "       destroy it without a word." >&2
-        if [ "$cur_type" = "linux_raid_member" ]; then
+    # ext4 and btrfs are allowed only when they are OURS - carrying the label
+    # this installer writes. An ext4 or btrfs somebody else created is data,
+    # and the label is the only thing that distinguishes the two.
+    case "$cur_type" in
+        "") : ;;                                       # no filesystem at all
+        ext4|btrfs)
+            if [ "$cur_label" != "$ROOT_LABEL" ]; then
+                echo "ERROR: $dev holds a '$cur_type' filesystem labelled" >&2
+                echo "       '${cur_label:-<none>}', which is not $ROOT_LABEL." >&2
+                echo "       That is somebody else's data, not a previous install" >&2
+                echo "       of this one." >&2
+                return 1
+            fi
+            ;;
+        *)
+            echo "ERROR: $dev already holds a '$cur_type' filesystem." >&2
+            echo "       This installer creates a btrfs filesystem and would" >&2
+            echo "       destroy it without a word." >&2
+            if [ "$cur_type" = "linux_raid_member" ]; then
+                echo "" >&2
+                echo "       This is the RAID case seen on a real WDMCH: p20 was the" >&2
+                echo "       only member of a degraded RAID1 array whose md device was" >&2
+                echo "       the root filesystem. Formatting it would have taken the" >&2
+                echo "       running system with it." >&2
+            fi
             echo "" >&2
-            echo "       This is the RAID case seen on a real WDMCH: p20 was the" >&2
-            echo "       only member of a degraded RAID1 array whose md device was" >&2
-            echo "       the root filesystem. Formatting it would have taken the" >&2
-            echo "       running system with it." >&2
-        fi
-        echo "" >&2
-        echo "       Check what is using it:" >&2
-        echo "         blkid $ROOT_DEV ; cat /proc/mdstat ; lsblk -f" >&2
-        echo "       Nothing here is worth the risk. Stop and read" >&2
-        echo "       docs/RECOVERY.md before doing anything to this disk." >&2
-        exit 1
-    fi
+            echo "       Check what is using it:" >&2
+            echo "         blkid $dev ; cat /proc/mdstat ; lsblk -f" >&2
+            echo "       Nothing here is worth the risk. Stop and read" >&2
+            echo "       docs/RECOVERY.md before doing anything to this disk." >&2
+            return 1 ;;
+    esac
     # Belt and braces: an active md array naming this device at all.
     #
     # /proc/mdstat writes a member as "<dev>[<index>]", e.g.
@@ -296,13 +378,16 @@ if [ -b "$ROOT_DEV" ]; then
     # The first version of this pattern required the member to be preceded by
     # "[N] ", which is not how mdstat is formatted, so it matched nothing and
     # the safety net never fired. Verified against the line quoted above.
-    if [ -r /proc/mdstat ] && grep -qE "${DISK##*/}${ROOT_PART}\[[0-9]+\]" /proc/mdstat 2>/dev/null; then
-        echo "ERROR: $ROOT_DEV is an active md array member:" >&2
-        echo "       $(grep -E "${DISK##*/}${ROOT_PART}\[" /proc/mdstat | head -1)" >&2
+    if [ -r /proc/mdstat ] && grep -qE "${dev##*/}\[[0-9]+\]" /proc/mdstat 2>/dev/null; then
+        echo "ERROR: $dev is an active md array member:" >&2
+        echo "       $(grep -E "${dev##*/}\[" /proc/mdstat | head -1)" >&2
         echo "       Refusing to write to it." >&2
-        exit 1
+        return 1
     fi
-fi
+done
+return 0
+}
+refuse_in_use_partitions || exit 1
 
 # ---------------------------------------------------------------------------
 # 2. confirmation
@@ -415,11 +500,73 @@ load_mke2fs() {
     return 0
 }
 
-run_mke2fs() {
-    target="$1"
-    load_mke2fs || return 1
-    LD_LIBRARY_PATH="$E2FSDIR/usr/lib:$E2FSDIR/lib:$E2FSDIR/usr/lib/musl" \
-        "$E2FSDIR/sbin/mke2fs" -q -t ext4 -L "$ROOT_LABEL" -F "$target"
+BTRFSDIR=/tmp/btrfs
+have_btrfs() { [ -x "$BTRFSDIR/sbin/mkfs.btrfs" ]; }
+
+# btrfs-progs is not in busybox. It is unpacked from the offline repo on the
+# stick, exactly as e2fsprogs is, so the rescue image does not have to carry it.
+# Without this the installer cannot create the filesystem it exists to create,
+# so a failure here is fatal rather than a fallback to ext4: silently making a
+# single-device ext4 would leave the operator with something that does not match
+# what they asked for and does not fit the data.
+load_btrfs() {
+    have_btrfs && return 0
+    log "btrfs-progs is not in busybox - unpacking it from the stick ..."
+    rm -rf "$BTRFSDIR"
+    mkdir -p "$BTRFSDIR"
+    APK=/sbin/apk.static
+    [ -x "$APK" ] || APK=/usr/sbin/apk.static
+    [ -x "$APK" ] || { echo "ERROR: apk.static not found in the initramfs" >&2; return 1; }
+    [ -d /etc/apk/keys ] || { echo "ERROR: /etc/apk/keys missing" >&2; return 1; }
+    "$APK" add --root "$BTRFSDIR" --initdb \
+        --repository "file://$APKS_DIR/main" \
+        --repository "file://$APKS_DIR/community" \
+        --keys-dir /etc/apk/keys \
+        --no-cache --no-scripts btrfs-progs >/dev/null 2>&1 || {
+            echo "ERROR: could not install btrfs-progs from $APKS_DIR" >&2
+            echo "       the offline repo on the stick is incomplete -" >&2
+            echo "       rebuild flash.zip so it carries btrfs-progs + its libs" >&2
+            return 1
+        }
+    have_btrfs || { echo "ERROR: btrfs-progs unpacked but $BTRFSDIR/sbin/mkfs.btrfs missing" >&2; return 1; }
+    log "btrfs-progs ready at $BTRFSDIR"
+    return 0
+}
+
+run_mkbtrfs() {
+    # $@ = the member devices, in order.
+    load_btrfs || return 1
+    # -f because these are block devices, not files; mkfs.btrfs otherwise
+    # refuses on anything but a blank device.
+    "$BTRFSDIR/sbin/mkfs.btrfs" \
+        -f \
+        -d "$BTRFS_DATA_PROFILE" \
+        -m "$BTRFS_META_PROFILE" \
+        -L "$ROOT_LABEL" \
+        "$@" || return 1
+}
+
+# Is every member already part of one filesystem carrying our label? Reads the
+# UUID off the first member and requires the rest to match it, so "already
+# installed" means one filesystem, not two that happen to share a label.
+btrfs_is_ours() {
+    command -v blkid >/dev/null 2>&1 || return 1
+    [ "$(blkid -s TYPE -o value "$ROOT_DEV" 2>/dev/null || true)" = "btrfs" ] || return 1
+    [ "$(blkid -s LABEL -o value "$ROOT_DEV" 2>/dev/null || true)" = "$ROOT_LABEL" ] || return 1
+    local u d
+    u=$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null || true)
+    [ -n "$u" ] || return 1
+    for d in $FS_DEVS; do
+        [ "$(blkid -s UUID -o value "$d" 2>/dev/null || true)" = "$u" ] || return 1
+    done
+    return 0
+}
+
+# How many devices does the mounted filesystem actually report? Used to prove
+# the second member joined, rather than assuming mkfs did as it was asked.
+btrfs_show_dev_count() {
+    "$BTRFSDIR/sbin/btrfs" filesystem show "$MNT" 2>/dev/null \
+        | grep -cE '^[[:space:]]*devid' || true
 }
 
 MNT=/mnt/install
@@ -427,10 +574,10 @@ mkdir -p "$MNT"
 mounted=0
 
 if [ "$has_gpt" = "0" ]; then
-    # Blank disk: one ext4 partition across the whole device. busybox fdisk
-    # is MBR-only and that is fine - nothing on this platform reads the
-    # partition table; the rescue init finds the rootfs by filesystem label.
-    log "partitioning $DISK (one primary partition, ext4) ..."
+    # Blank disk: one partition across the whole device. busybox fdisk is
+    # MBR-only and that is fine - nothing on this platform reads the partition
+    # table; the rescue init finds the rootfs by filesystem label.
+    log "partitioning $DISK (one primary partition, btrfs) ..."
     fdisk "$DISK" >/dev/null 2>&1 <<'FDISKEOF' || die "fdisk failed on $DISK"
 o
 n
@@ -447,31 +594,51 @@ FDISKEOF
     mdev -s 2>/dev/null || true
     sleep 2
     ROOT_DEV="${DISK}1"
+    DATA_DEV=""
+    FS_DEVS="$ROOT_DEV"
     [ -b "$ROOT_DEV" ] || die "$ROOT_DEV did not appear after partitioning"
-    log "formatting $ROOT_DEV ..."
-    run_mke2fs "$ROOT_DEV" || die "mke2fs failed on $ROOT_DEV"
+    log "creating a btrfs filesystem on $ROOT_DEV ..."
+    run_mkbtrfs "$ROOT_DEV" || die "mkfs.btrfs failed on $ROOT_DEV"
 else
-    # Factory disk: reuse the partition in place. Never touch the table.
-    if [ "$already_ours" = "1" ]; then
-        log "$ROOT_DEV already carries label $ROOT_LABEL - reusing it"
-    elif [ "$has_ext4" = "1" ]; then
-        # The partition number was already restricted to 19/20 above, where
-        # the partition table is known. This branch only has to say what it is
-        # about to do.
-        log "$ROOT_DEV holds an existing ext4 filesystem - reformatting with label $ROOT_LABEL"
-        run_mke2fs "$ROOT_DEV" || die "mke2fs failed on $ROOT_DEV"
+    # Factory disk: reuse the partitions in place. Never touch the table.
+    if btrfs_is_ours; then
+        log "$FS_DEVS already carry label $ROOT_LABEL - reusing the btrfs"
     else
-        log "formatting $ROOT_DEV ..."
-        run_mke2fs "$ROOT_DEV" || die "mke2fs failed on $ROOT_DEV"
+        if [ -n "$DATA_DEV" ]; then
+            log "creating ONE btrfs across $ROOT_DEV + $DATA_DEV ..."
+            log "  data profile $BTRFS_DATA_PROFILE, metadata $BTRFS_META_PROFILE"
+            run_mkbtrfs $FS_DEVS || die "mkfs.btrfs failed across $FS_DEVS"
+        else
+            log "creating a btrfs filesystem on $ROOT_DEV ..."
+            run_mkbtrfs "$ROOT_DEV" || die "mkfs.btrfs failed on $ROOT_DEV"
+        fi
     fi
 fi
+
+# The filesystem identity has to be recoverable after the fact: fstab names the
+# label, but the handoff also wants to confirm every member is present before
+# mounting. Read it back from the filesystem we just made rather than trusting
+# a value we computed.
+BTRFS_UUID=$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null || true)
+[ -n "$BTRFS_UUID" ] || die "the new filesystem reports no UUID - cannot verify it"
 
 partprobe "$DISK" 2>/dev/null || true
 mdev -s 2>/dev/null || true
 sleep 1
 
-mount -t ext4 "$ROOT_DEV" "$MNT" || die "cannot mount $ROOT_DEV"
+# subvol=/ is the top-level subvolume. The system lives there so that the
+# filesystem label alone identifies it: findfs returns a device, fstab names
+# the label, and nothing has to resolve a subvolume id that differs per install.
+mount -t btrfs -o "subvol=$BTRFS_SUBVOL,compress=zstd" "$ROOT_DEV" "$MNT" \
+    || die "cannot mount the btrfs on $ROOT_DEV"
 mounted=1
+
+if [ -n "$DATA_DEV" ]; then
+    # Prove the second member is actually in the filesystem, rather than
+    # assuming mkfs did what it was asked.
+    ndev=$(btrfs_show_dev_count 2>/dev/null || echo "")
+    log "  btrfs members reported: ${ndev:-?}"
+fi
 
 # Clear whatever was on it - a stale rootfs here would confuse the handoff.
 log "clearing old content on $ROOT_DEV ..."
@@ -620,7 +787,12 @@ cat > "$MNT/etc/fstab" <<EOF
 # WDMCH Alpine install
 # The vendor U-Boot cannot boot from this disk; boot files come from the
 # FAT32 rescue stick and this rootfs is entered by the rescue init.
-LABEL=$ROOT_LABEL  /      ext4  defaults,noatime  0 1
+# One btrfs across $FS_DEVS - named by label, so fstab does not depend on
+# which member the kernel happens to enumerate first, and the second device
+# is optional. mkfs.btrfs records every member in the filesystem itself, so
+# mounting any one of them brings up the whole thing; do NOT list both here,
+# or mount(8) will try to mount the same filesystem twice.
+LABEL=$ROOT_LABEL  /      btrfs  subvol=$BTRFS_SUBVOL,compress=zstd,noatime  0 1
 tmpfs              /tmp   tmpfs defaults          0 0
 debugfs            /sys   sysfs  defaults          0 0
 proc               /proc  proc   defaults          0 0
@@ -688,6 +860,10 @@ mkdir -p "$MNT/etc"
 cat > "$MNT/etc/wdmch-installed" <<EOF
 root_dev=$ROOT_DEV
 root_label=$ROOT_LABEL
+root_fs=btrfs
+root_subvol=$BTRFS_SUBVOL
+root_uuid=$BTRFS_UUID
+root_members=$FS_DEVS
 installed_by=install-alpine
 EOF
 

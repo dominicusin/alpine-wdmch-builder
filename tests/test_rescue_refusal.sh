@@ -39,7 +39,8 @@ grep -q 'stick_whole' "$WORK/guards.raw" \
     || { echo "FAIL: extraction lost the rescue-stick guard"; exit 1; }
 
 # Turn the block-device test into a seam we can drive.
-sed 's/\[ -b "\$part" \]/is_block "$part"/g' "$WORK/guards.raw" > "$WORK/guards.sh"
+sed -e 's/\[ -b "\$part" \]/is_block "$part"/g' \
+    -e 's/\[ -b "\$dev" \]/is_block "$dev"/g' "$WORK/guards.raw" > "$WORK/guards.sh"
 grep -q 'is_block' "$WORK/guards.sh" \
     || { echo "FAIL: could not install the is_block seam"; exit 1; }
 
@@ -67,7 +68,8 @@ run_case() {
 
     set +e
     out=$(
-        export DISK=/dev/sda ROOT_PART="$rootpart" PROC_MOUNTS="$WORK/mounts"
+        export DISK=/dev/sda ROOT_PART="$rootpart" DATA_PART=21 ROOT_LABEL=wdmch-root SINGLE_DEV=0 \
+           PROC_MOUNTS="$WORK/mounts" MDSTAT_PATH="$WORK/no-mdstat"
         is_block() { grep -qxF "$1" "$WORK/nodes"; }
         # shellcheck disable=SC1090
         . "$WORK/guards.sh" >/dev/null 2>&1
@@ -164,8 +166,8 @@ allow_case() {
 
     set +e
     out=$(
-        export DISK=/dev/sda ROOT_PART="$rootpart" \
-               has_gpt="$has_gpt" BLANK_DISK="$blank"
+        export DISK=/dev/sda ROOT_PART="$rootpart" DATA_PART=21 \
+               has_gpt="$has_gpt" BLANK_DISK="$blank" ROOT_LABEL=wdmch-root SINGLE_DEV=0
         # shellcheck disable=SC1090
         . "$WORK/allow.sh" >/dev/null 2>&1
         echo PROCEED

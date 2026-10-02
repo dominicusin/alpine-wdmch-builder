@@ -19,6 +19,12 @@
 ROOT_LABEL=${ROOT_LABEL:-wdmch-root}
 NEWROOT=${NEWROOT:-/newroot}
 USB_ROOT=${USB_ROOT:-/media/usb}
+# btrfs needs the subvolume at mount time. It cannot be read from the installed
+# system before that system is mounted, which is exactly why the installer puts
+# the system in the TOP-LEVEL subvolume: this default is then always correct and
+# the label alone identifies the filesystem. Overridable only for a future
+# install that uses a named subvolume.
+ROOT_SUBVOL=${ROOT_SUBVOL:-/}
 MOUNTS=${MOUNTS:-/proc/mounts}
 RESCUE_SSH_KEY=${RESCUE_SSH_KEY:-/root/.ssh/authorized_keys}
 
@@ -74,7 +80,9 @@ for p in /dev/sda20 /dev/sda19 /dev/sda21 /dev/sda22 /dev/sda24; do
         *) say "skipping $p (PARTLABEL '$plabel' is a vendor slot)"
            continue ;;
     esac
-    if mkdir -p "$NEWROOT" && mount -t ext4 "$p" "$NEWROOT" 2>/dev/null; then
+    if mkdir -p "$NEWROOT" \
+       && { mount -t btrfs -o "subvol=${ROOT_SUBVOL:-/}" "$p" "$NEWROOT" 2>/dev/null \
+            || mount -t ext4 "$p" "$NEWROOT" 2>/dev/null; }; then
         if [ -x "$NEWROOT/sbin/init" ] || [ -x "$NEWROOT/init" ] \
            || [ -x "$NEWROOT/usr/sbin/init" ] || [ -x "$NEWROOT/lib/systemd/systemd" ]; then
             candidate="$p"
@@ -92,12 +100,33 @@ if [ -z "$candidate" ]; then
 fi
 
 # --- mount and verify ---------------------------------------------------------
+# The installed system is ONE btrfs spanning p20 + p21. A multi-device btrfs is
+# mounted through ANY one of its members - the filesystem metadata records the
+# rest - so the candidate device is enough; listing both would mount the same
+# filesystem twice. That is why fstab names the label and not both devices.
+#
+# It mounts with -t btrfs now, not -t ext4. Leaving ext4 there meant a btrfs
+# install could never hand over at all: the mount failed, the script printed
+# "cannot mount ... staying in the rescue shell", and the operator was left
+# staring at a rescue shell on a machine that had installed perfectly well.
 mkdir -p "$NEWROOT"
 if ! is_mounted "$NEWROOT"; then
-    if ! mount -t ext4 "$candidate" "$NEWROOT" 2>/dev/null; then
-        say "cannot mount $candidate - staying in the rescue shell"
-        exit 0
+    if ! mount -t btrfs -o "subvol=${ROOT_SUBVOL:-/},compress=zstd" "$candidate" "$NEWROOT" 2>/dev/null; then
+        # Fall back to auto-detection rather than giving up: an older install
+        # from before the btrfs change is still ext4.
+        if ! mount -t ext4 "$candidate" "$NEWROOT" 2>/dev/null; then
+            say "cannot mount $candidate - staying in the rescue shell"
+            exit 0
+        fi
     fi
+fi
+
+# A degraded multi-device filesystem is exactly the failure this handover has
+# to notice: if one member is missing the filesystem still mounts, the system
+# still boots, and the loss is invisible until something tries to write.
+if [ -w "$NEWROOT" ] && command -v btrfs >/dev/null 2>&1; then
+    deg=$(btrfs filesystem show "$NEWROOT" 2>/dev/null | grep -ci 'missing' || true)
+    [ "${deg:-0}" -gt 0 ] && say "WARNING: the btrfs is DEGRADED - a member device is missing"
 fi
 
 init=""

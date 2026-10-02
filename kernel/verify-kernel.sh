@@ -43,6 +43,7 @@ echo "Verifying built-in rescue drivers in .config..."
 MISSING=0
 for sym in CONFIG_AHCI_RTD1295 CONFIG_R8169SOC CONFIG_PHY_RTK_RTD_SATAPHY \
            CONFIG_USB_STORAGE CONFIG_USB_DWC3 CONFIG_EXT4_FS CONFIG_VFAT_FS \
+           CONFIG_BTRFS_FS \
            CONFIG_BLK_DEV_INITRD CONFIG_RD_GZIP CONFIG_BINFMT_SCRIPT CONFIG_PACKET; do
     if ! grep -q "^${sym}=y" "$BUILD_DIR/.config" 2>/dev/null; then
         echo "ERROR: $sym not built-in - rescue image would be non-functional" >&2

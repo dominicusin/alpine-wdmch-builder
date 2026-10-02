@@ -37,7 +37,10 @@ trap 'rm -rf "$W"' EXIT
 
 # The guard, extracted verbatim.
 GUARD="$W/guard"
-sed -n '/^# --- refuse a partition that is already in use/,/^fi$/p' "$SCRIPT" > "$GUARD"
+# The guard is a complete function, so extracting it is exact. Slicing a range
+# out of inline code broke twice as the block grew - once ending the range at
+# `fi` truncated the loop, once at `done` caught the wrong one.
+sed -n '/^refuse_in_use_partitions() {/,/^}$/p' "$SCRIPT" > "$GUARD"
 if ! grep -q 'cur_type' "$GUARD"; then
     echo "FAIL: could not extract the in-use guard from $SCRIPT" >&2
     echo "      If it was renamed, this test must follow it, not be deleted." >&2
@@ -50,19 +53,30 @@ sh -n "$GUARD" || { echo "FAIL: the extracted guard is not valid shell" >&2; exi
 # mknod), and blkid is replaced by a function returning the measured type.
 # The decision logic below those two lines is the installer's, untouched.
 cat > "$W/harness" <<'HARNESS'
-blkid() { [ "${1:-}" = "-s" ] && { printf '%s' "$FAKE_TYPE"; return 0; }; return 1; }
+blkid() {
+    case "$2" in
+        TYPE)  printf '%s' "$FAKE_TYPE" ;;
+        LABEL) printf '%s' "$FAKE_LABEL" ;;
+        *) return 1 ;;
+    esac
+    return 0
+}
 mdstat_lines() { printf '%s' "$FAKE_MDSTAT"; }
 HARNESS
 
-probe() { # $1 = blkid TYPE, $2 = mdstat text
+probe() { # $1 = blkid TYPE, $2 = mdstat text, FAKE_LABEL optional
     printf '%s' "$2" > "$W/mdstat"
-    # Only two substitutions: the -b precondition (we cannot mknod without
-    # privileges) and the path to the md table (so a fixture can be supplied).
-    sed -e 's|^if \[ -b "\$ROOT_DEV" \]; then$|if true; then|' \
-        -e "s|/proc/mdstat|\$MDSTAT_PATH|g" "$GUARD" > "$W/g2"
-    FAKE_TYPE="$1" MDSTAT_PATH="$W/mdstat" ROOT_DEV="$W/sda20" \
-    DISK=/dev/sda ROOT_PART=20 \
-    sh -c '. "$1"; . "$2"; eval "$(cat "$3")"' sh "$W/harness" "$GUARD" "$W/g2" 2>&1
+    # One substitution: the block-device precondition, which needs mknod and
+    # therefore cannot be satisfied here. The decision logic below it is the
+    # installer's own function, extracted verbatim.
+    sed -e 's@^    \[ -b "\$dev" \] || continue$@    :@' \
+        -e "s@/proc/mdstat@\$MDSTAT_PATH@g" "$GUARD" > "$W/g2"
+    # $W/g2 is sourced INSTEAD of $GUARD: sourcing the raw function would run
+    # the real [ -b ] test, skip every device, and report "allowed" for
+    # everything - which is exactly what happened before this was fixed.
+    FAKE_TYPE="$1" FAKE_LABEL="${FAKE_LABEL:-}" MDSTAT_PATH="$W/mdstat" ROOT_DEV="$W/sda20" \
+    DISK=/dev/sda ROOT_PART=20 FS_DEVS="$W/sda20" ROOT_LABEL="wdmch-root" SINGLE_DEV=0 \
+    sh -c '. "$1"; . "$2"; refuse_in_use_partitions' sh "$W/harness" "$W/g2" 2>&1
 }
 
 echo "=== install-alpine: is the target partition already in use? ==="
@@ -99,21 +113,28 @@ rc=$?
 check "an empty target partition is allowed through" \
       "$(cond '[ $rc -eq 0 ]'; echo $?)"
 
-# --- an existing ext4 is allowed (reinstall into our own label) -------------
+# --- ext4 and btrfs pass ONLY when they carry our label ---------------------
+# The label is the only thing that separates a previous install of this system
+# from somebody else's data, which is why an unlabelled ext4 is refused rather
+# than adopted.
 out=$(probe "ext4" "")
 rc=$?
-check "an existing ext4 target is allowed through" \
+check "an unlabelled ext4 is refused - it is not our previous install" \
+      "$(cond '[ $rc -ne 0 ]'; echo $?)"
+out=$(FAKE_LABEL=wdmch-root probe "ext4" "")
+rc=$?
+check "an ext4 carrying our own label is allowed through" \
       "$(cond '[ $rc -eq 0 ]'; echo $?)"
 
 # --- the guard must be positioned before anything destructive ---------------
 # If it sits after mke2fs it is decoration. The first destructive command is
 # run_mke2fs; the guard has to come before it.
 guard_line=$(grep -n 'refuse a partition that is already in use' "$SCRIPT" | head -1 | cut -d: -f1)
-mkfs_line=$(grep -n 'run_mke2fs' "$SCRIPT" | head -1 | cut -d: -f1)
+mkfs_line=$(grep -n 'run_mkbtrfs "\$ROOT_DEV"' "$SCRIPT" | head -1 | cut -d: -f1)
 conf_line=$(grep -n '^# 2. confirmation' "$SCRIPT" | head -1 | cut -d: -f1)
 check "the guard runs before the confirmation prompt" \
       "$(cond "[ $guard_line -lt $conf_line ]"; echo $?)"
-check "the guard runs before any mkfs" \
+check "the guard runs before any filesystem is created" \
       "$(cond "[ $guard_line -lt $mkfs_line ]"; echo $?)"
 
 # --- the refusal must be in the header contract too -------------------------
