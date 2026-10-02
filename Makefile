@@ -77,6 +77,12 @@ test: validate
 	bash tests/test_tools.sh
 	bash test-flash.sh
 
+# Drop the cached APKINDEX. See image/dl-packages.sh: the cache can outlive the
+# packages it names, and a stale one fails the build on a version that no longer
+# exists on the mirror - while CI, fetching fresh, would not reproduce it.
+clean-cache:
+	rm -rf .work/apk-cache-offline
+
 clean:
 	./build-image.sh --clean
 

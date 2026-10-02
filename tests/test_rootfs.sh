@@ -27,7 +27,7 @@ sh -n "$ROOT/usr/local/sbin/verify-install" || {
 if [ -f "$PROJ_DIR/build/flash.zip" ]; then
     echo "Checking flash.zip package set matches the resolver closure"
     python3 - "$PROJ_DIR" <<'PY'
-import subprocess, sys, zipfile, os
+import re, subprocess, sys, zipfile, os
 repo = sys.argv[1]
 idx = os.path.join(repo, "build/usb-tree-root/apks")
 main_i = os.path.join(idx, "main/APKINDEX.tar.gz")
@@ -40,8 +40,26 @@ if not (os.path.exists(main_i) and os.path.exists(comm_i)):
     print(f"  FAIL: offline APKINDEX missing under {idx}")
     print("        the closure check cannot run; run `make package` first")
     sys.exit(1)
-seeds = ["alpine-base", "openrc-init", "ifupdown-ng", "dropbear",
-         "e2fsprogs", "kexec-tools"]
+# The seeds are READ FROM image/dl-packages.sh, not restated here.
+#
+# This list used to be a second, hand-maintained copy of the one in
+# dl-packages.sh. Adding btrfs-progs there - required now, because mkfs.btrfs is
+# not in busybox and the installer cannot create its filesystem without it - left
+# this copy untouched, so the check recomputed a 35-package closure and reported
+# btrfs-progs, eudev-libs, lzo and zstd-libs as being in flash.zip "but not in
+# the closure". CI caught it; this checkout could not, because build/flash.zip
+# predated the seed.
+#
+# Two copies of a fact drift. Reading the declaration means the next seed added
+# cannot break this check, which is the point of the check.
+seed_src = os.path.join(repo, "image/dl-packages.sh")
+m = re.search(r"^SEEDS=\(([^)]*)\)", open(seed_src, encoding="utf-8").read(), re.M)
+if not m:
+    print(f"  FAIL: no SEEDS=(...) declaration in {seed_src}")
+    print("        the closure check cannot run; reporting success would hide")
+    print("        exactly the drift this check exists to catch")
+    sys.exit(1)
+seeds = m.group(1).split()
 out = subprocess.run([sys.executable, os.path.join(repo, "image/resolve-deps.py"),
                       "--tsv", "--main", main_i, "--community", comm_i] + seeds,
                      capture_output=True, text=True, cwd=repo)

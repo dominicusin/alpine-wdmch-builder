@@ -88,6 +88,16 @@ log "COMM_DIR=$COMM_DIR"
 log "DRY_RUN=$DRY_RUN"
 log ""
 
+# The cached index can outlive the packages it names. Alpine supersedes a
+# package and prunes the old file from the CDN mirror, but this cache is only
+# refreshed when absent - so a checkout that last built weeks ago resolves
+# libssl3-3.3.7-r1 from its own index and then gets a 404 for it from the live
+# mirror, and the build fails on a package that exists in neither place at once.
+# Hit while rebuilding locally: the cached index was from 2026-09-22 and libssl3
+# had moved on.
+#
+# `make clean-cache` drops it. A long-lived checkout should do the same before a
+# release build, because CI always fetches fresh and would not reproduce it.
 if [ ! -f "$MAIN_INDEX" ]; then
     log "APKINDEX (main) not cached — downloading..."
     mkdir -p "$(dirname "$MAIN_INDEX")"
