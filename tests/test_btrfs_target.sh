@@ -108,6 +108,31 @@ check "verify-install asserts the device count" \
 check "  ...and fails a single-device root" \
       "$(cond 'grep -q "only ONE device" scripts/verify-install.sh'; echo $?)"
 
+# --- the kexec handoff, which boots with NO rescue stick --------------------
+# boot-full-alpine is the one boot path with no fallback: it kexecs /boot/Image
+# straight into the installed root, so a wrong rootfstype there takes the box
+# down with nothing to fall back to. It used to hardcode ext4.
+check "the kexec cmdline does NOT hardcode rootfstype=ext4" \
+      "$(cond '! grep -q "rootfstype=ext4" "$INST"'; echo $?)"
+check "  ...it uses the recorded filesystem type" \
+      "$(cond 'grep -q "rootfstype=\$ROOT_FS" "$INST"'; echo $?)"
+check "  ...read from /etc/wdmch-installed, not assumed" \
+      "$(cond 'grep -q "s/\^root_fs=//p" "$INST"'; echo $?)"
+check "  ...probed off the device when that file predates it" \
+      "$(cond 'grep -q "blkid -s TYPE -o value \"\$ROOT_DEV\"" "$INST"'; echo $?)"
+check "the subvol option is passed for btrfs only" \
+      "$(cond 'grep -q "ROOT_OPTS=\"rootflags=subvol=" "$INST" && grep -q "if \[ \"\$ROOT_FS\" = \"btrfs\" \]" "$INST"'; echo $?)"
+check "  ...and omitted otherwise, since subvol is btrfs-only" \
+      "$(cond 'grep -q "ROOT_OPTS=\"\"" "$INST"'; echo $?)"
+check "the resolved boot parameters are printed" \
+      "$(cond 'grep -q "rootfstype=\$ROOT_FS  \${ROOT_OPTS" "$INST"'; echo $?)"
+
+# --- the text the operator reads on the stick itself ------------------------
+check "the on-stick README describes the btrfs target" \
+      "$(cond 'grep -q "btrfs spanning both" image/package-rescue.sh'; echo $?)"
+check "  ...and warns that both partitions are destroyed" \
+      "$(cond 'grep -qi "back up p21" image/package-rescue.sh'; echo $?)"
+
 # --- the documentation must not still describe ext4-on-p20 -------------------
 bad=$(grep -rln 'ext4' docs/*.md README.md 2>/dev/null | while read -r d; do
         grep -qiE 'ext4.{0,40}wdmch-root|wdmch-root.{0,40}ext4|root filesystem is ext4|/` is ext4' "$d" && echo "$d"

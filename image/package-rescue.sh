@@ -165,7 +165,9 @@ INSTALL ALPINE TO THE INTERNAL DISK (offline, no network needed)
   # packages come from apks/ on this stick - no network needed
 
 WHAT install-alpine WRITES
-  Exactly one partition: p20 (SYSTEM_B), ext4, label "wdmch-root".
+  Exactly two partitions: p20 (SYSTEM_B) + p21 (DATA), formatted as ONE
+  btrfs spanning both, label "wdmch-root", data profile single, no md RAID.
+  Both are destroyed. Back up p21 first if it holds anything.
   It does NOT create partitions and does NOT modify the partition table.
   Left untouched: p1 (firmware table), the A/B/GOLD firmware slots
   (p2-p17), p18 (CONFIG), p19, and your data in p22/p24.

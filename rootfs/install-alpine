@@ -450,10 +450,12 @@ done
 swapoff -a 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 4. make sure $ROOT_DEV is an ext4 we can write to
+# 4. work out what is on the target, and load the tools to change it
 # ---------------------------------------------------------------------------
 # busybox blkid only prints UUIDs - no -s/-o. Use findfs for label lookups
 # and a real read-only mount to find out what is actually on the partition.
+# The ext4 probe below is a REUSE check only: a partition already carrying our
+# own label is kept, whatever its type. New installs are always btrfs.
 MNT=/mnt/install
 mkdir -p "$MNT"
 
@@ -897,6 +899,26 @@ cat > "$MNT/usr/local/sbin/boot-full-alpine" <<'KEXEC_EOF'
 set -u
 ROOT_DEV=$(sed -n 's/^root_dev=//p' /etc/wdmch-installed 2>/dev/null)
 [ -n "$ROOT_DEV" ] || ROOT_DEV=$(findfs LABEL=wdmch-root 2>/dev/null)
+# The filesystem type is recorded at install time rather than assumed. It used to
+# be hardcoded to ext4 on the kexec line below, which is the cmdline that boots
+# the system with NO rescue stick: the one boot path that had no fallback. On a
+# btrfs root the kernel was told to mount btrfs as ext4 and the box came up to
+# nothing - after an install that had reported success.
+# Recorded at install time, else probed from the device itself. Probing matters
+# for an install made before root_fs was recorded: defaulting to btrfs there
+# would tell the kernel to mount an ext4 root as btrfs.
+ROOT_FS=$(sed -n 's/^root_fs=//p' /etc/wdmch-installed 2>/dev/null)
+[ -n "$ROOT_FS" ] || ROOT_FS=$(blkid -s TYPE -o value "$ROOT_DEV" 2>/dev/null || true)
+[ -n "$ROOT_FS" ] || ROOT_FS=btrfs
+ROOT_SUBVOL=$(sed -n 's/^root_subvol=//p' /etc/wdmch-installed 2>/dev/null)
+[ -n "$ROOT_SUBVOL" ] || ROOT_SUBVOL=/
+# subvol is a btrfs mount option. Passing it to another filesystem is at best
+# ignored and at worst a mount failure, so it is only ever added for btrfs.
+if [ "$ROOT_FS" = "btrfs" ]; then
+    ROOT_OPTS="rootflags=subvol=$ROOT_SUBVOL"
+else
+    ROOT_OPTS=""
+fi
 KERNEL=/boot/Image
 DTB=/boot/rtd1295-wd-mycloud-home.dtb
 
@@ -908,10 +930,11 @@ command -v kexec >/dev/null 2>&1 || { echo "ERROR: kexec not installed" >&2; exi
 # it can mount the rootfs itself. The rescue initramfs is NOT usable here.
 kexec -l "$KERNEL" \
       --dtb "$DTB" \
-      --command-line="root=$ROOT_DEV rootfstype=ext4 rw console=ttyS0,115200 earlycon=uart8250,mmio32,0x98007800 panic=5" \
+      --command-line="root=$ROOT_DEV rootfstype=$ROOT_FS $ROOT_OPTS rw console=ttyS0,115200 earlycon=uart8250,mmio32,0x98007800 panic=5" \
     || { echo "ERROR: kexec -l failed" >&2; exit 1; }
 
-echo "kexec entry prepared."
+echo "kexec entry prepared:"
+echo "  root=$ROOT_DEV  rootfstype=$ROOT_FS  ${ROOT_OPTS:-(no fs options)}"
 if [ "${1:-}" = "--exec" ]; then
     echo "executing now ..."
     kexec -e

@@ -186,7 +186,7 @@ cp rootfs/init "$ROOT/init"
 chmod 755 "$ROOT/init"
 
 # ---- handoff to an installed system ----------------------------------------
-# init calls /etc/init.d/99-disk-root: it finds the ext4 labelled wdmch-root
+# init calls /etc/init.d/99-disk-root: it finds the btrfs labelled wdmch-root
 # (p20 / SYSTEM_B) and switch_root()s into it. Without this the rescue image
 # can install a system but never boot it.
 mkdir -p "$ROOT/etc/init.d"
