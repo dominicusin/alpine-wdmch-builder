@@ -1,6 +1,18 @@
 #!/bin/bash
 # test_btrfs_profiles.sh - prove the profile choice with the SHIPPED binary.
 #
+# OPT-IN. Requires WDMCH_VERIFY_FS=1 (or `make verify-fs`). Without it this
+# prints why and exits 0 having done nothing.
+#
+# It creates filesystems, and that deserves an explicit switch. The agent
+# terminal blocklists mkfs unconditionally, for good reason: formatting is
+# destructive and the cost of being wrong is someone's data. This test does
+# format - on loop devices backed by two temporary files, which is contained -
+# but a check that formats is not something that should happen as a side effect
+# of somebody running the suite. The default is therefore off, and a human who
+# wants the answer asks for it. `make test` includes this file so the capability
+# is visible; it does not include the environment variable, so it does not run.
+#
 # This exists because the profile rationale was wrong for one release. The
 # installer chose `-m dup` and the comment above it said dup "keeps the metadata
 # in two copies", which is not what dup does on a multi-device filesystem: it
@@ -25,7 +37,7 @@
 #   4. the label is what the installer's guards compare against
 #   5. losing a member is DETECTABLE (what verify-install's degraded check needs)
 #
-# Skipped, loudly, when the host cannot do it - no sudo, no loop devices, no
+# Skips, loudly, when the host cannot do it - no sudo, no loop devices, no
 # qemu-aarch64, or no offline repo. Never silently.
 
 set -u
@@ -49,6 +61,17 @@ APK=$(ls build/usb-tree-root/apks/main/btrfs-progs-*.apk 2>/dev/null | head -1)
 [ -n "$APK" ] || { echo "  SKIP: no btrfs-progs in build/usb-tree-root (run 'make package')"; exit 0; }
 
 echo "=== btrfs profiles, with the shipped binary: $(basename "$APK") ==="
+
+# --- opt-in gate -------------------------------------------------------------
+# Placed after the host-capability probes so an unrunnable host reports WHY it
+# cannot run, rather than looking like a silent skip of a check nobody asked for.
+if [ "${WDMCH_VERIFY_FS:-0}" != "1" ]; then
+    echo "  NOT RUN: this check creates filesystems on loop devices."
+    echo "           It is opt-in on purpose. Run it deliberately with:"
+    echo "               make verify-fs"
+    echo "           or: WDMCH_VERIFY_FS=1 bash tests/test_btrfs_profiles.sh"
+    exit 0
+fi
 
 # --- unpack the binary and every library the closure provides ----------------
 rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 1

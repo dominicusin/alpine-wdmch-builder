@@ -78,6 +78,12 @@ test: validate
 	bash tests/test_tools.sh
 	bash test-flash.sh
 
+# Create real filesystems to verify the btrfs profile choice. NOT part of
+# `make test`: formatting is destructive, and a check that formats should not be
+# a side effect of running the suite. Opt-in, on purpose.
+verify-fs:
+	WDMCH_VERIFY_FS=1 bash tests/test_btrfs_profiles.sh
+
 # Drop the cached APKINDEX. See image/dl-packages.sh: the cache can outlive the
 # packages it names, and a stale one fails the build on a version that no longer
 # exists on the mirror - while CI, fetching fresh, would not reproduce it.
