@@ -1,0 +1,129 @@
+#!/bin/bash
+# test_btrfs_target.sh - is the btrfs target actually what the project makes?
+#
+# The install target is ONE btrfs spanning p20 + p21, with no md anywhere.
+# These assert the properties that make that true, from the installer's own
+# text, because every one of them is a way the feature can silently not happen:
+#
+#   - the second partition defaults to 21 and is allowlisted with the first
+#   - both members are created on, not just the first
+#   - the profiles are single/dup, which is the only combination that does not
+#     cap the filesystem at the size of the small disk
+#   - nothing anywhere creates an md array
+#   - the rescue kernel can actually mount btrfs
+#   - fstab names the label, not both devices, so mount(8) does not mount the
+#     same filesystem twice
+#   - the handover mounts btrfs, or a btrfs install could never hand over
+
+set -u
+cd "$(dirname "$0")/.." || exit 1
+INST=rootfs/install-alpine
+HAND=rootfs/init.d/99-disk-root
+FAILED=0
+
+check() { if [ "$2" -eq 0 ]; then echo "  ok    $1"; else echo "  FAIL  $1"; FAILED=$((FAILED+1)); fi; }
+cond()  { _cond_rc=0; for a in "$@"; do eval "$a" || _cond_rc=1; done; return $_cond_rc; }
+
+for f in "$INST" "$HAND"; do
+    [ -f "$f" ] || { echo "FAIL: $f missing" >&2; exit 1; }
+    sh -n "$f" || { echo "FAIL: $f has a syntax error" >&2; exit 1; }
+done
+
+echo "=== the btrfs target: p20 + p21, one filesystem, no md ==="
+
+# --- the target is two partitions, and both are allowlisted ------------------
+check "the data partition defaults to 21 (DATA)" \
+      "$(cond 'grep -qE "^DATA_PART=21$" "$INST"'; echo $?)"
+check "  ...and is overridable" \
+      "$(cond 'grep -q -- "--data-part" "$INST"'; echo $?)"
+check "the allowlist covers BOTH members" \
+      "$(cond 'grep -q "for part in .ROOT_PART .DATA_PART" "$INST"'; echo $?)"
+check "  ...and includes 21" \
+      "$(cond 'grep -qE "19\|20\|21\)" "$INST"'; echo $?)"
+
+# --- both devices are passed to mkfs, not just one ----------------------------
+check "the filesystem members are collected in FS_DEVS" \
+      "$(cond 'grep -q "FS_DEVS=" "$INST"'; echo $?)"
+check "  ...and both are passed to mkfs.btrfs" \
+      "$(cond 'grep -q "run_mkbtrfs .FS_DEVS" "$INST"'; echo $?)"
+check "  ...so a two-device filesystem is actually created" \
+      "$(cond 'grep -q "creating ONE btrfs across" "$INST"'; echo $?)"
+
+# --- the profiles, which the sizes force -------------------------------------
+check "the data profile is single" \
+      "$(cond 'grep -qE "^BTRFS_DATA_PROFILE=single$" "$INST"'; echo $?)"
+check "the metadata profile is dup" \
+      "$(cond 'grep -qE "^BTRFS_META_PROFILE=dup$" "$INST"'; echo $?)"
+check "  ...and both are passed to mkfs" \
+      "$(cond 'grep -q -- "-d \"\$BTRFS_DATA_PROFILE\"" "$INST" && grep -q -- "-m \"\$BTRFS_META_PROFILE\"" "$INST"'; echo $?)"
+check "  ...a redundant data profile would cap the fs at 20 GB" \
+      "$(cond 'grep -q "capped by the smallest device" "$INST"'; echo $?)"
+
+# --- no md anywhere -----------------------------------------------------------
+# Scoped to md CREATION. The installer legitimately reads /proc/mdstat to
+# REFUSE an md member - naming md1 there is the guard working, not a raid
+# being built. mdadm --create is what would actually assemble one.
+check "the installer creates no md array" \
+      "$(cond '! grep -qE "mdadm[[:space:]]+--create|mdadm[[:space:]]+-[[:space:]]*C" "$INST"'; echo $?)"
+check "  ...it only READS /proc/mdstat, to refuse" \
+      "$(cond 'grep -q "/proc/mdstat" "$INST"'; echo $?)"
+check "  ...and the header says so" \
+      "$(cond 'grep -qi "no md" "$INST"'; echo $?)"
+check "the handover assembles no md array" \
+      "$(cond '! grep -qE "mdadm|mdadm --assemble" "$HAND"'; echo $?)"
+check "btrfs is the only raid the project uses" \
+      "$(cond 'grep -qi "btrfs raid\|raid0\|raid1" "$INST"'; echo $?)"
+
+# --- the rescue kernel can mount it ------------------------------------------
+check "CONFIG_BTRFS_FS is built in, not a module" \
+      "$(cond 'grep -qE "^CONFIG_BTRFS_FS=y$" config/kernel.config'; echo $?)"
+check "  ...and the build fails without it" \
+      "$(cond 'grep -q "CONFIG_BTRFS_FS" kernel/verify-kernel.sh'; echo $?)"
+
+# --- btrfs-progs is reachable offline ----------------------------------------
+check "btrfs-progs is a seed in the offline closure" \
+      "$(cond 'grep -q "btrfs-progs" image/dl-packages.sh'; echo $?)"
+check "  ...and the installer unpacks it like e2fsprogs" \
+      "$(cond 'grep -q "load_btrfs" "$INST" && grep -q "btrfs-progs" "$INST"'; echo $?)"
+
+# --- fstab names the label, not both devices --------------------------------
+check "fstab mounts by label" \
+      "$(cond 'grep -qE "^LABEL=\\\$ROOT_LABEL  /      btrfs" "$INST"'; echo $?)"
+check "  ...and does NOT list both members" \
+      "$(cond '! grep -qE "^LABEL=.*\\\$FS_DEVS" "$INST"'; echo $?)"
+
+# --- the handover can actually mount it --------------------------------------
+check "the handover mounts -t btrfs" \
+      "$(cond 'grep -q "mount -t btrfs" "$HAND"'; echo $?)"
+check "  ...and mounts the top-level subvolume" \
+      "$(cond 'grep -q "subvol=" "$HAND"'; echo $?)"
+check "  ...with an ext4 fallback for older installs" \
+      "$(cond 'grep -q "mount -t ext4" "$HAND"'; echo $?)"
+check "  ...and reports a degraded filesystem" \
+      "$(cond 'grep -qi "DEGRADED" "$HAND"'; echo $?)"
+
+# --- acceptance checks the thing it is meant to check -----------------------
+check "verify-install asserts the device count" \
+      "$(cond 'grep -q "btrfs spans" scripts/verify-install.sh'; echo $?)"
+check "  ...and fails a single-device root" \
+      "$(cond 'grep -q "only ONE device" scripts/verify-install.sh'; echo $?)"
+
+# --- the documentation must not still describe ext4-on-p20 -------------------
+bad=$(grep -rln 'ext4' docs/*.md README.md 2>/dev/null | while read -r d; do
+        grep -qiE 'ext4.{0,40}wdmch-root|wdmch-root.{0,40}ext4|root filesystem is ext4|/` is ext4' "$d" && echo "$d"
+      done || true)
+if [ -n "$bad" ]; then
+    echo "  FAIL  documentation still describes the root as ext4:"
+    echo "$bad" | sed 's/^/        /'
+    FAILED=$((FAILED+1))
+else
+    echo "  ok    no document describes the root filesystem as ext4"
+fi
+
+echo
+if [ "$FAILED" -eq 0 ]; then
+    echo "btrfs target: PASSED"
+else
+    echo "btrfs target: FAILED ($FAILED)" >&2
+    exit 1
+fi

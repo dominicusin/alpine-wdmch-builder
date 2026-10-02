@@ -11,7 +11,7 @@ The installer writes exactly one partition:
 
 | Target | Action |
 |---|---|
-| **p20 (`SYSTEM_B`)** | Formatted ext4, filesystem label `wdmch-root`; the Alpine root filesystem is installed here |
+| **p20 + p21 (`SYSTEM_B` + `DATA`)** | Formatted as ONE btrfs spanning both, filesystem label `wdmch-root`, no md RAID; the Alpine root filesystem is installed here |
 | p1 (`FW_TABLE`) and all other partitions | **Untouched** |
 
 Nothing is created and nothing is deleted. This is deliberate: it preserves the

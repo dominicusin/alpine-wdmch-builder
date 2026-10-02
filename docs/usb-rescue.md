@@ -129,7 +129,7 @@ Run it over SSH (or from the serial console) once the box has come up. It
 checks, and exits non-zero if any fail:
 
 - an init is present and executable, and PID 1 is an init
-- `/` really is the ext4 filesystem labelled `wdmch-root`
+- `/` really is the btrfs filesystem labelled `wdmch-root`, spanning p20 and p21
 - `/` is mounted read-write
 - the internal disk still exposes at least 20 partitions — i.e. the factory
   GPT was **not** rewritten

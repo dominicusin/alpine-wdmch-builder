@@ -41,7 +41,9 @@ It checks, and names the failing line if something is wrong:
 | Check | What a pass means |
 |---|---|
 | init is PID 1 | The system is actually running, not a rescue shell that never handed over |
-| `/` is ext4, label `wdmch-root` | The installer wrote the partition it said it would |
+| `/` is btrfs, label `wdmch-root` | The installer wrote the filesystem it said it would |
+| btrfs spans 2 devices | The install really used both p20 and p21, not one |
+| btrfs is not degraded | No member device is missing — the failure that boots fine and then fails on write |
 | `/` is mounted rw | The root filesystem is not read-only |
 | internal disk has ≥20 partitions | **The factory GPT survived.** This is the safety property |
 | `/boot/Image` present | The kexec handoff has something to load |

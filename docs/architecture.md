@@ -89,7 +89,8 @@ correct side for anything permanent.
 ## Where Alpine is installed
 
 The installer writes the Alpine root filesystem into the **existing p20
-(`SYSTEM_B`)**, formatted ext4 with filesystem label `wdmch-root`. It does not
+(`SYSTEM_B`)** together with p21 (`DATA`), formatted as ONE btrfs filesystem
+spanning both, with filesystem label `wdmch-root` and no md RAID. It does not
 create any partition. p1 (`FW_TABLE`) and every other partition are left
 untouched.
 

@@ -100,10 +100,36 @@ if [ "$LIVE" -eq 1 ]; then
             lbl=$(blkid -s LABEL -o value "$rootdev" 2>/dev/null || true)
             typ=$(blkid -s TYPE  -o value "$rootdev" 2>/dev/null || true)
             [ "$lbl" = "wdmch-root" ] && pass "root is $rootdev, $typ, label wdmch-root" \
-                                     || fail "root is $rootdev (label '$lbl', type '$typ') - expected label wdmch-root"
-        else
-            warn "could not determine the root device"
-        fi
+                                       || fail "root is $rootdev (label '$lbl', type '$typ') - expected label wdmch-root"
+          else
+              warn "could not determine the root device"
+          fi
+
+          # The label alone does not prove this install is the one the project
+          # makes. The target is ONE btrfs spanning p20 + p21; a filesystem that
+          # somehow ended up on a single device carries the same label and would
+          # pass every other check here, including the factory-GPT one. So the
+          # device count is asserted, not assumed.
+          if [ "$typ" = "btrfs" ] && command -v btrfs >/dev/null 2>&1; then
+              ndev=$(btrfs filesystem show "$rootdev" 2>/dev/null | grep -cE '^[[:space:]]*devid')
+              case "$ndev" in
+                  ''|0) warn "could not count btrfs devices on $rootdev" ;;
+                  1)    fail "the root filesystem has only ONE device - the install did not span p20 and p21" ;;
+                  *)    pass "btrfs spans $ndev devices" ;;
+              esac
+              # A degraded filesystem mounts and boots, then fails on the first
+              # write touching a lost device. Saying so is the value of the check.
+              miss=$(btrfs filesystem show "$rootdev" 2>/dev/null | grep -ci 'missing')
+              if [ "${miss:-0}" -gt 0 ]; then
+                  fail "the btrfs is DEGRADED - a member device is missing; the system will
+          boot and then fail on writes to the lost device"
+              else
+                  pass "btrfs is not degraded"
+              fi
+          elif [ "$typ" = "ext4" ]; then
+              warn "root is ext4, not btrfs - looks like an install from before the
+              btrfs change (single device, p20 only)"
+          fi
     else
         warn "no blkid available; skipping the label check"
     fi

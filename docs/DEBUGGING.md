@@ -194,7 +194,8 @@ You should see the factory GPT's 24 partitions. Use it to confirm:
   `tools/backup-fw-table.sh`
   `/dev/sda1` is the USB stick in a rescue shell, not the firmware table — use `tools/backup-fw-table.sh`, which picks the internal disk.
 - p20 (`sda20`) is `SYSTEM_B` — this is the partition the installer writes, and
-  it carries the ext4 label `wdmch-root` after installation.
+  it carries the btrfs label `wdmch-root` after installation, spanning p20
+  and p21.
 
 ```bash
 dmesg | tail -50
