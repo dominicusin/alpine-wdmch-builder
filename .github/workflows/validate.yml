@@ -386,6 +386,14 @@ jobs:
         run: |
           bash tests/test_repo_layout.sh
 
-      - name: Run test tools
-        run: |
-          bash tests/test_tools.sh
+      # tests/test_tools.sh is deliberately NOT run here. It asserts that the
+      # validators ACCEPT a good artifact, and check-fdt.py checks board
+      # identity - compatible = wd,mycloud-home, model = WD My Cloud Home,
+      # memory@0 = 0x40000000. It needs build/release/sata.uImage and
+      # build/release/rescue.sata.dtb, which this lane never builds, so it
+      # could only ever fail: this lane has been red since the step was added
+      # and nothing about the code under test was involved.
+      #
+      # It runs in build.yml, immediately after package-rescue.sh produces
+      # those artifacts. A synthetic stand-in was tried and rejected - faking
+      # a board to satisfy a board check is a green run that proves nothing.

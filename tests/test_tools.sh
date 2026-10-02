@@ -48,6 +48,16 @@ must_reject() {
 
 must_accept() {
     local tool="$1" file="$2" label="$3" out rc
+    # Refuse to run without a real artifact, and say why. This is not
+    # fail-open behaviour: the check is "the validator ACCEPTS a good artifact",
+    # and check-fdt.py checks board identity - compatible = wd,mycloud-home,
+    # model = WD My Cloud Home, memory@0 = 0x40000000. There is no honest
+    # synthetic substitute for that. Faking a board to satisfy a board check
+    # would be a green run that proved nothing, which is the defect class this
+    # repository keeps removing.
+    #
+    # The consequence is that this test belongs in the lane that builds. See
+    # .github/workflows/build.yml.
     if [ ! -s "$2" ]; then
         fail "$label - no artifact to test with (build first)"
         return
