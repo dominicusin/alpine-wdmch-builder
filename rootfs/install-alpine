@@ -471,9 +471,15 @@ fi
 # 3. stop anything using the disk
 # ---------------------------------------------------------------------------
 log "unmounting anything already mounted from $DISK ..."
-for m in $(awk -v d="$DISK" '$1 ~ "^"d {print $2}' /proc/mounts 2>/dev/null); do
-    umount -f "$m" 2>/dev/null || true
-done
+  # $mounts_file, not /proc/mounts. The seam is documented at its definition and
+  # used by the rescue-stick detection two hundred lines up; this call site read
+  # the host directly, so a test that set PROC_MOUNTS believed it was controlling
+  # the installer's view of what is mounted when this loop was not. Anything
+  # reaching the disk first is unmounted here - it is a destructive step - so a
+  # test that cannot see it is a test that cannot see a whole class of failure.
+  for m in $(awk -v d="$DISK" '$1 ~ "^"d {print $2}' "$mounts_file" 2>/dev/null); do
+      umount -f "$m" 2>/dev/null || true
+  done
 swapoff -a 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
