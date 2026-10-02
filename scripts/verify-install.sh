@@ -52,12 +52,27 @@ count_partitions() {
 # "Most partitions" is independent of enumeration order, of whether the stick is
 # plugged in, and of which letter the kernel assigned.
 select_internal_disk() {
-    local best="" bestn=0 d c
-    for d in /dev/sd?; do
-        c=$(count_partitions "$d")
-        if [ "$c" -gt "$bestn" ]; then bestn=$c; best="$d"; fi
-    done
-    printf '%s\n' "$best"
+  # DEVS defaults to the real /dev/sd? glob. It is overridable for the same
+  # reason PARTS is: a caller that fakes the partition table must also be able
+  # to say which disks exist, or the selection silently runs against whatever
+  # hardware the test host happens to have.
+  #
+  # tests/test_verify_install_gpt.sh extracts this function and executes it. It
+  # used to fake /proc/partitions but not this glob, so it passed on any machine
+  # that happened to have the disks the fixture described - and failed on CI,
+  # where /dev/sd* is whatever the runner exposes. The two lanes of the same run
+  # disagreed with each other, which is the tell: the test was reading the host.
+  local best="" bestn=0 d c
+  local devs=${DEVS:-}
+  if [ -z "$devs" ]; then
+      # shellcheck disable=SC2086
+      devs=$(echo /dev/sd?)
+  fi
+  for d in $devs; do
+      c=$(count_partitions "$d")
+      if [ "$c" -gt "$bestn" ]; then bestn=$c; best="$d"; fi
+  done
+  printf '%s\n' "$best"
 }
 
 echo "=== WDMCH install verification (target: $TARGET) ==="

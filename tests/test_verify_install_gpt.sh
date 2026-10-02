@@ -35,6 +35,13 @@ W=$(mktemp -d)
 # Build a synthetic /proc/partitions. $1 = letter of the internal disk
 mkparts() {
     local internal=$1 stick=$2 count=$3
+    # DEVS is set to exactly the disks this fixture describes. Without it,
+    # select_internal_disk() globs the host's real /dev/sd* and this test
+    # silently becomes a measurement of whatever disks the machine running it
+    # happens to have - which is why it passed here and failed in CI, with the
+    # two lanes of a single run disagreeing with each other.
+    DEVS="/dev/$internal"
+    [ -n "$stick" ] && DEVS="$DEVS /dev/$stick"
     : > "$W/partitions"
     local i
     for i in $(seq 1 "$count"); do
@@ -84,7 +91,7 @@ sh -n "$FNS" || { echo "FAIL: extracted functions are not valid shell" >&2; exit
 # selected_disk [<partition-table>] -> "<disk> <count>" on one line, from the
 # script's own code.
 selected_disk() {
-    PARTS=${1:-$W/partitions} sh -c '
+    PARTS=${1:-$W/partitions} DEVS="$DEVS" sh -c '
         . "$1"
         d=$(select_internal_disk)
         printf "%s %s\n" "$d" "$(count_partitions "$d")"
