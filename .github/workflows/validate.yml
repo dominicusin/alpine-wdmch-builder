@@ -149,7 +149,15 @@ jobs:
           # Scoped to release.yml and build.yml on purpose: this file runs
           # test_repo_layout.sh and test_tools.sh directly because they need
           # no build artifacts and must also gate a bare pull request.
-          if grep -rnE '^\s+bash tests/test_[a-z_]+\.sh' \
+          # The pattern covers both shapes a hand-written call takes:
+          #   bash tests/test_foo.sh   (under tests/)
+          #   bash test-flash.sh       (at the repo root, hyphenated)
+          # The second shape is why test-flash.sh was being called by hand
+          # in build.yml and had never been run by the release jobs - the
+          # workflows that actually publish build/flash.zip.
+          # tests/qemu/smoke.sh stays allowed: it needs a built rootfs and
+          # runs on purpose after `make test`, it is not part of the list.
+          if grep -rnE '^\s+bash (tests/test_[a-z_]+\.sh|test-[a-z-]+\.sh)' \
                .github/workflows/release.yml .github/workflows/build.yml 2>/dev/null; then
             echo "FAIL: a workflow runs individual test scripts instead of 'make test':" >&2
             exit 1

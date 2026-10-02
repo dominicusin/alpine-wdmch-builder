@@ -179,10 +179,11 @@ jobs:
           # `make test` runs the full suite - it used to be missing here
           # entirely, so a pull request could merge with every test script
           # failing and this step would still report success.
+          # test-flash.sh is in the Makefile too, not called separately here:
+          # it validates build/flash.zip, and the release jobs that actually
+          # publish that file had no way to run it.
           echo "=== make test ==="
           make test
-          echo "=== test-flash.sh ==="
-          bash test-flash.sh
 
       # This workflow only runs on branch pushes and PRs, never on a tag, so
       # there is no tag-specific upload to do here: release.yml is the only

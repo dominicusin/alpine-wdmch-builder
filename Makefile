@@ -63,6 +63,7 @@ test: validate
 	bash tests/test_p1_backup.sh
 	bash tests/test_no_fail_open.sh
 	bash tests/test_workflows.sh
+	bash test-flash.sh
 
 clean:
 	./build-image.sh --clean
