@@ -54,12 +54,40 @@ else
     echo "  (dtc not on PATH - semantic pass skipped here; make validate runs it)"
 fi
 
-# ---- 3. the decompiled .dts, when one is supplied ------------------------
+# ---- 3. the decompiled .dts, when one is available -----------------------
 # Value-level only: the string must be present, whatever dtc did with the
 # surrounding syntax. A failure prints the head of the file, so the next
 # occurrence is diagnosable without another CI round trip.
+#
+# The .dts is a RENDERING, not a build product: nothing in the build emits it,
+# and `build/` is gitignored. The Makefile passed the path unconditionally, so
+# the test demanded a file that only exists if somebody decompiled the DTB by
+# hand earlier - true in this checkout, absent in every fresh CI runner. That is
+# how build.yml stayed red across two releases while release.yml, which does not
+# pass the path, stayed green: the same suite, two lanes, one of them failing
+# on a file neither of them produces.
+#
+# So derive it when it is missing rather than require it, and say plainly when
+# the value check cannot run rather than passing silently.
+DTS_SOURCE="supplied"
+if [ -n "$DTS" ] && [ ! -s "$DTS" ]; then
+    if [ -s "$DTB" ] && command -v dtc >/dev/null 2>&1; then
+        DTS="${DTS%.dts}.ci.dts"
+        if dtc -I dtb -O dts -o "$DTS" "$DTB" 2>/dev/null; then
+            DTS_SOURCE="decompiled from $DTB"
+        else
+            DTS=""
+            echo "  (dtc could not decompile $DTB - value check skipped)"
+        fi
+    else
+        DTS=""
+        echo "  (no .dts and no dtc on PATH - value check skipped, not passed)"
+    fi
+fi
+
 if [ -n "$DTS" ]; then
     [ -s "$DTS" ] || fail "DTS missing or empty: $DTS"
+    echo "  (.dts: $DTS_SOURCE)"
     for want in 'wd,mycloud-home' 'WD My Cloud Home' '0x40000000' 'rtk-sata-phy'; do
         if ! grep -qF "$want" "$DTS"; then
             echo "FAIL: '$want' not present in $DTS" >&2
