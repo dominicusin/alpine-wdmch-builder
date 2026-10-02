@@ -65,6 +65,7 @@ test: validate
 	bash tests/test_handoff.sh
 	bash tests/test_init_disk.sh
 	bash tests/test_resolver.sh
+	bash tests/test_preflight.sh
 	bash tests/test_workflows.sh
 	bash test-flash.sh
 

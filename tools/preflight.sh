@@ -13,6 +13,59 @@ set -Eeuo pipefail
 hr() { printf '%s\n' "------------------------------------------------------------------"; }
 sec() { hr; echo "  $*"; hr; }
 
+# Which whole disk is the rescue stick?
+#
+# This must not be assumed. In the rescue environment the USB stick claims
+# /dev/sda, so anything that hardcodes sda - the old version of this script
+# included - inventories the boot medium and then answers "how big is p20?" with
+# the stick's own partition table. On a machine reached over SSH the internal
+# disk is usually sda, which is exactly why the bug would survive casual use.
+stick_disk() {
+    local mp src mf
+    # MOUNTS_FILE exists so tests/test_preflight.sh can drive this with a
+    # synthetic mount table. The default is the only value used in production,
+    # and the script stays a single file because it is piped over SSH.
+    mf=${MOUNTS_FILE:-/proc/mounts}
+    for mp in /media/usb /mnt/usb /media/stick; do
+        src=$(awk -v m="$mp" '$2 == m {print $1; exit}' "$mf" 2>/dev/null) || true
+        if [ -n "${src:-}" ]; then
+            printf '%s\n' "${src%%[0-9]}"     # /dev/sdb1 -> /dev/sdb
+            return 0
+        fi
+    done
+    printf '\n'                              # empty: no stick mounted
+}
+
+# Which whole disk is the internal SATA disk? The first disk that is not the
+# stick. lsblk -d lists whole disks only, so partitions cannot be picked up.
+# The exclusion compares whole disks, so both sides must be full paths:
+# stick_disk yields /dev/sda (from the mount table) and lsblk -dno PATH yields
+# /dev/sda too. Using -o NAME here returns bare "sda", which never compares
+# equal, so the stick would be selected AS the internal disk - the exact
+# failure this function exists to prevent.
+internal_disk() {
+    local want d
+    want=$(stick_disk)
+    if command -v lsblk >/dev/null 2>&1; then
+        while read -r d; do
+            [ -n "$d" ] || continue
+            [ "$d" = "$want" ] && continue
+            printf '%s\n' "$d"
+            return 0
+        done < <(lsblk -dno PATH 2>/dev/null || true)
+    fi
+    for d in /dev/sda /dev/sdb /dev/sdc /dev/sdd; do
+        [ -b "$d" ] || continue
+        [ "$d" = "$want" ] && continue
+        printf '%s\n' "$d"
+        return 0
+    done
+    printf '\n'
+}
+
+STICK_DISK=$(stick_disk)
+INTERNAL_DISK=$(internal_disk)
+
 echo
 echo "==================================="
 echo "  WDMCH pre-flight inventory"
@@ -32,9 +85,14 @@ echo "  uptime   : $(uptime -p 2>/dev/null || echo '?')"
 sec "2. THE decisive question: how big is p20 SYSTEM_B?"
 # The installer writes only here. If the target system does not fit, no
 # later step matters and the whole approach has to be reconsidered.
+echo "  rescue stick    : ${STICK_DISK:-none detected}"
+echo "  internal disk   : ${INTERNAL_DISK:-NONE FOUND - nothing else below is reliable}"
+echo
 if command -v lsblk >/dev/null 2>&1; then
     lsblk -b -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null \
-        | awk 'NR==1 || /sda/ {printf "  %-10s %14s  %-8s %-10s %-12s %s\n", $1,$2,$3,$4,$5,$6}'
+        | awk -v d="${INTERNAL_DISK#/dev/}" \
+              'NR==1 || $1 == d || index($1, d) == 1 && substr($1, length(d)+1) ~ /^[0-9]+$/ \
+               {printf "  %-10s %14s  %-8s %-10s %-12s %s\n", $1,$2,$3,$4,$5,$6}'
 else
     echo "  lsblk unavailable; raw partition sizes:"
     cat /proc/partitions 2>/dev/null | sed 's/^/  /'
@@ -42,17 +100,31 @@ fi
 echo
 echo "  NOTE: partx is read-only and does not need root, so it is the"
 echo "        most reliable way to see p20 when lsblk is unavailable."
-if command -v partx >/dev/null 2>&1 && [ -r /dev/sda ]; then
-    partx --show --bytes /dev/sda 2>/dev/null | grep -E ':(19|20|21):' | sed 's/^/  /'
+if command -v partx >/dev/null 2>&1 && [ -n "${INTERNAL_DISK:-}" ] && [ -r "$INTERNAL_DISK" ]; then
+    partx --show --bytes "$INTERNAL_DISK" 2>/dev/null | grep -E ':(19|20|21):' | sed 's/^/  /'
+fi
+echo
+# The verdict, stated rather than left for the operator to spot in a table of
+# 24 partitions. Silence here reads as "I did not look", and on this machine
+# a missing p20 changes the decision completely.
+P20_BYTES=$(lsblk -bndo SIZE "${INTERNAL_DISK}20" 2>/dev/null | head -1 || true)
+if [ -n "${P20_BYTES:-}" ] && [ "$P20_BYTES" -gt 0 ] 2>/dev/null; then
+    echo "  VERDICT: p20 SYSTEM_B = $((P20_BYTES / 1024 / 1024)) MiB on ${INTERNAL_DISK}20"
+else
+    echo "  VERDICT: NO p20 (${INTERNAL_DISK:-no disk}20) FOUND."
+    echo "           If this machine is not a WDMCH, stop here. If it is, the"
+    echo "           factory table is gone and the installer will refuse it."
 fi
 
 sec "3. Factory partition table: is it intact?"
 # The installer's safety property is that it never rewrites this table.
 # Capturing it now gives an exact before/after comparison.
-if command -v sgdisk >/dev/null 2>&1 && [ -r /dev/sda ]; then
-    sgdisk -p /dev/sda 2>/dev/null | sed 's/^/  /'
-elif command -v parted >/dev/null 2>&1 && [ -r /dev/sda ]; then
-    parted -s /dev/sda print free 2>/dev/null | sed 's/^/  /'
+if [ -z "${INTERNAL_DISK:-}" ] || [ ! -r "$INTERNAL_DISK" ]; then
+    echo "  (no readable internal disk; ${STICK_DISK:-no stick} is not it)"
+elif command -v sgdisk >/dev/null 2>&1; then
+    sgdisk -p "$INTERNAL_DISK" 2>/dev/null | sed 's/^/  /'
+elif command -v parted >/dev/null 2>&1; then
+    parted -s "$INTERNAL_DISK" print free 2>/dev/null | sed 's/^/  /'
 else
     echo "  (no sgdisk/parted; the rescue image reports this itself)"
 fi
