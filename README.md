@@ -120,7 +120,8 @@ MIT License — see [LICENSE](LICENSE).
 - **DO NOT** boot GOLD partition — it is a factory-reset appliance, not a safe fallback
 - **DO NOT** write A/B/GOLD slots as part of this project
 - **DO** back up any existing WDMCH firmware table before future flashing work
-  (`dd if=/dev/sda1 of=fw-table-backup.bin bs=512`)
+  (`tools/backup-fw-table.sh` — never `dd if=/dev/sda1`, which in a rescue
+  shell copies the USB stick)
 - This is a **rescue boot** tool; it does not overwrite NAS firmware
 - The factory GPT is preserved — never repartition the internal disk
 - No private SSH key is stored anywhere in this repository or its artifacts

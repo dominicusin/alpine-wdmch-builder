@@ -105,7 +105,18 @@ kexec -e                           # reboots into it
 - **DO back up the firmware table** (p1) before any flashing work:
 
   ```bash
-  dd if=/dev/sda1 of=fw-table-backup.bin bs=512
+- **DO back up the firmware table** (p1) before any flashing work. From a
+  rescue shell:
+
+  ```bash
+  tools/backup-fw-table.sh
+  ```
+
+  It picks the internal disk rather than assuming it. One warning, kept on a
+  single line so the guard that checks it can tell a prohibition from an
+  instruction: **never hand-type `dd if=/dev/sda1`**. In a rescue environment
+  `/dev/sda` is the USB stick, so that command copies the stick and leaves you
+  with a file that looks like a firmware-table backup and is not one.
   ```
 
 - **DO** keep a second known-good stick if the box has user data on it.

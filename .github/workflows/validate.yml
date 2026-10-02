@@ -327,6 +327,30 @@ jobs:
           fi
           echo "Planning documents match the repo: OK"
 
+      - name: Reject a device-literal command in operator documentation
+        run: |
+          # Four documents carried this command:
+          #     dd if=/dev/sda1 of=fw-table-backup.bin bs=512
+          # In a rescue environment /dev/sda IS the USB stick, so it copies the
+          # stick, names the file fw-table-backup.bin, and leaves the operator
+          # believing they can flash firmware. The firmware table is p1 - the
+          # partition whose loss can make the box unbootable - and the one
+          # backup that is not verified is the one nobody checks.
+          #
+          # tools/backup-fw-table.sh now owns this, and picks the internal disk
+          # instead of assuming one. Placeholders like /dev/sdX1 stay legal.
+          #
+          # A line naming the command in order to FORBID it is deliberately
+          # excluded: two documents now say "never dd if=/dev/sda1" on purpose,
+          # and a guard that rejected its own warnings would be switched off.
+          if grep -rn 'dd if=/dev/sd[a-z][0-9]' docs/ README.md 2>/dev/null \
+             | grep -viE 'never|not |do not|rather than|instead of'; then
+            echo "FAIL: operator documentation tells the reader to back up a literal device." >&2
+            echo "      Use tools/backup-fw-table.sh, which identifies the internal disk." >&2
+            exit 1
+          fi
+          echo "no literal-device backup command in documentation: OK"
+
       - name: Run repo layout test
         run: |
           bash tests/test_repo_layout.sh

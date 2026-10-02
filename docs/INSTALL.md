@@ -28,8 +28,11 @@ anything permanent.
 Before any flashing work, back up p1 (`FW_TABLE`):
 
 ```bash
-dd if=/dev/sda1 of=fw-table-backup.bin bs=512
+tools/backup-fw-table.sh
 ```
+
+`/dev/sda1` is the USB stick in a rescue shell, not the firmware table — use `tools/backup-fw-table.sh`, which picks the internal disk. The installer's own backup lands on the
+installed system at `/root/wdmch-fw-table-backup.bin`.
 
 ## Installing Alpine
 
