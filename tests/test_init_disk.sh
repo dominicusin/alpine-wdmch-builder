@@ -24,7 +24,9 @@ INIT=rootfs/init
 FAILED=0
 
 check() { if [ "$2" -eq 0 ]; then echo "  ok    $1"; else echo "  FAIL  $1"; FAILED=$((FAILED+1)); fi; }
-cond()  { rc=0; for a in "$@"; do eval "$a" || rc=1; done; return $rc; }
+# Accumulator is _cond_rc, not rc: cond always runs inside $( ), and a bare
+# `rc=0` there would clobber a caller's rc before the assertion could read it.
+cond()  { _cond_rc=0; for a in "$@"; do eval "$a" || _cond_rc=1; done; return $_cond_rc; }
 
 [ -f "$INIT" ] || { echo "FAIL: $INIT missing" >&2; exit 1; }
 

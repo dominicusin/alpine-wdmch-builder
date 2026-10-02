@@ -128,7 +128,13 @@ if [ $RC -ne 0 ] || [ -z "$CLOSURE" ]; then
     exit 1
 fi
 if [ -s "$LOG.resolve-err" ]; then
-    log "WARNING: resolver reported unresolved dependencies:"
+    # The resolver exits non-zero for every failure it knows about, so any
+    # stderr with rc=0 is a diagnostic nobody anticipated. It is fatal rather
+    # than a warning: the previous version downgraded unresolved packages to
+    # a warning, which is how a stick got built with a missing library and
+    # apk add failed on the WDMCH after the disk was already being written.
+    # Silence from the resolver is the contract; anything on stderr breaks it.
+    log "ERROR: resolver wrote to stderr but exited 0 - treating as failure:"
     sed 's/^/    /' "$LOG.resolve-err"
     log "    the offline repo would be INCOMPLETE - the install would fail."
     exit 1

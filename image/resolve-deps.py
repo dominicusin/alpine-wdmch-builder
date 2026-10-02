@@ -195,7 +195,17 @@ def resolve_closure(main_index, community_index, seeds):
                 continue
             # Skip virtual deps like so:libc.musl-aarch64.so.1
             if dep.startswith('so:'):
-                soname = dep[3:]
+                # The version suffix is stripped even though current Alpine
+                # does not emit one here (all 6411 so: entries in the pinned
+                # index are bare). The provides side is split on '=' and
+                # indexed by bare soname, so leaving the version attached here
+                # would look up a key that can never exist - and a key that
+                # never exists is silently skipped three lines below, which is
+                # precisely the e2fsprogs failure described above: a truncated
+                # closure that still looks complete. If a future index format
+                # versions these, the cost of being wrong is an unbootable
+                # install and the cost of being ready is one split.
+                soname = re.split(r'[><=]', dep[3:])[0]
                 if soname in soname_to_pkg:
                     for provider in soname_to_pkg[soname]:
                         if provider not in processed and provider not in missing:
@@ -277,7 +287,24 @@ def main():
         with open(fail_file, 'w') as f:
             for m in missing:
                 f.write(f"{m}\n")
-        print(f"WARNING: {len(missing)} packages not found: {', '.join(missing)}", file=sys.stderr)
+        # An unresolved dependency is fatal, and it is fatal AFTER the closure
+        # is printed above, which is deliberate: the partial closure is what
+        # makes the failure debuggable, and nothing consumes stdout when the
+        # exit status is non-zero.
+        #
+        # This used to be a WARNING with exit 0. The caller checked for a
+        # non-zero status and for an empty closure, and a partial closure is
+        # neither - so a stick was built missing a library, apk add failed on
+        # the WDMCH after the disk was already being written, and the only
+        # clue was a warning in a build log. Same class as the nine other
+        # defects in this series: the run said it worked and it had not.
+        print(f"ERROR: {len(missing)} packages could not be resolved: "
+              f"{', '.join(missing)}", file=sys.stderr)
+        print(f"       The closure above is INCOMPLETE and must not be packaged.",
+              file=sys.stderr)
+        print(f"       Missing names recorded in {fail_file}", file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
 
 if __name__ == '__main__':
     main()
