@@ -45,9 +45,18 @@ done
 # device with the partition digits removed, so sda1 becomes sda.
 stick_disk() {
     local mp src
+    # MOUNTS_FILE, like the caller uses. It used to read /proc/mounts directly,
+    # so a test could not exercise it at all: it silently answered from whatever
+    # the host happened to have mounted under /media/usb, and on a machine with
+    # nothing mounted there it returned empty and looked correct.
+    #
+    # That is how the rescue-stick refusal ended up "tested" only by grepping
+    # the script's own text - a check that passes whether or not the function
+    # works. Point it at a table instead and the refusal can be executed.
+    local mounts="${MOUNTS_FILE:-/proc/mounts}"
     for mp in /media/usb /mnt/usb /media/stick; do
-        [ -r /proc/mounts ] || return 0
-        src=$(awk -v m="$mp" '$2 == m {print $1; exit}' /proc/mounts 2>/dev/null) || true
+        [ -r "$mounts" ] || return 0
+        src=$(awk -v m="$mp" '$2 == m {print $1; exit}' "$mounts" 2>/dev/null) || true
         if [ -n "${src:-}" ]; then
             printf '%s\n' "${src%%[0-9]}"
             return 0

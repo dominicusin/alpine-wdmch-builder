@@ -61,28 +61,39 @@ check "--help exits 0" "$(cond '[ $rc -eq 0 ]'; echo $?)"
 # This is the test that matters. If the operator names the stick explicitly -
 # which is exactly what happens when autodetect is wrong - it must refuse
 # rather than write a file that looks like a firmware table.
-STICK_PATH=""
-if [ -b /dev/sda1 ]; then
-    # On a real machine: point the mount table at /dev/sda1 and hand it sda.
-    out=$(MOUNTS_FILE=/proc/mounts run --device /dev/sda 2>&1)
-    case "$out" in
-        *"rescue stick"*) STICK_PATH="mount table";;
-        *) STICK_PATH="" ;;
-    esac
-fi
-if [ -n "$STICK_PATH" ]; then
-    check "naming the rescue stick is refused" \
-          "$(cond 'echo "$out" | grep -qE "rescue stick, not the internal disk|could not identify"'; echo $?)"
-    check "  ...and no backup file was written" \
-          "$(cond '[ ! -s "$W/fw-table-backup.bin" ]'; echo $?)"
-else
-    # No /dev/sda1 here (CI, container): assert the refusal text exists in the
-    # script at all, so the check cannot be deleted silently.
-    check "the script contains the rescue-stick refusal" \
-          "$(cond 'grep -q "rescue stick, not the internal disk" "$SCRIPT"'; echo $?)"
-    check "  ...and refuses to continue after saying so" \
-          "$(cond 'grep -q "BACKUP_REFUSAL_MARKER" "$SCRIPT" || true'; echo $?)"
-fi
+# stick_disk() is EXTRACTED and executed against a synthetic mount table.
+#
+# It used to read /proc/mounts hardcoded, so it could not be exercised: it
+# answered from whatever the host had mounted under /media/usb, and where
+# nothing was mounted there it returned empty and looked fine. So the check
+# below degraded to grepping the script's own text - which passes whether or not
+# the function works. A synthetic table makes the detection executable, and
+# therefore the refusal too.
+FNS=$(mktemp)
+sed -n '/^stick_disk() {/,/^}/p' "$SCRIPT" > "$FNS"
+grep -q '^stick_disk() {' "$FNS" || { echo "FAIL: could not extract stick_disk() from $SCRIPT" >&2; exit 1; }
+sh -n "$FNS" || { echo "FAIL: extracted stick_disk() is not valid shell" >&2; exit 1; }
+detect_stick() { MOUNTS_FILE="$1" sh -c '. "$1"; stick_disk' sh "$FNS" 2>/dev/null; }
+
+printf '/dev/sdb1 /media/usb vfat rw 0 0\n' > "$W/mounts-stick"
+printf '/dev/sda1 / ext4 rw 0 0\n'         > "$W/mounts-none"
+
+check "a stick mounted at /media/usb is detected as sdb" \
+      "$(cond '[ "$(detect_stick "$W/mounts-stick")" = "/dev/sdb" ]'; echo $?)"
+check "  ...and the partition digits are stripped, not the whole device" \
+      "$(cond '[ "$(detect_stick "$W/mounts-stick")" != "/dev/sdb1" ]'; echo $?)"
+check "no mount under /media/usb means no stick (no guessing)" \
+      "$(cond '[ -z "$(detect_stick "$W/mounts-none")" ]'; echo $?)"
+
+# The refusal itself still needs a real block device to reach, so it stays a
+# structural check - but it is now a statement about wiring, not the only
+# evidence that the detection works.
+check "the caller refuses when the given disk IS the detected stick" \
+      "$(cond 'grep -q "\[ \"\$DISK\" = \"\$STICK\" \]" "$SCRIPT"'; echo $?)"
+# Kept so the refusal text cannot be deleted silently while the checks above
+# still pass - they exercise the detection, not the message.
+check "the script still contains the rescue-stick refusal" \
+      "$(cond 'grep -q "rescue stick, not the internal disk" "$SCRIPT"'; echo $?)"
 
 # --- it must never write to a block device ------------------------------------
 # The whole premise: this reads p1. A write here would be the worst possible
