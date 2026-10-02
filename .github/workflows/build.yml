@@ -149,11 +149,6 @@ jobs:
       - name: Package rescue artifacts + flash.zip
         run: |
           bash image/package-rescue.sh
-          # The validators must ACCEPT a good artifact, which is a different
-          # question from "do the artifacts exist" - a validator that rejected
-          # everything would pass every other check in this workflow. It lived
-          # in validate.yml, which never builds, so it had never actually run.
-          bash tests/test_tools.sh
           echo ""
           echo "=== sata.uImage ==="
           # Header fields are checked by the one correct validator; it reads

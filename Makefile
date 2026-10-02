@@ -48,7 +48,6 @@ package:
 # here is how a broken artifact previously shipped under a green build - if a
 # check cannot run (missing artifact, not built yet) it must say so loudly.
 validate:
-	bash tests/test_tools.sh
 	python3 tools/check-image-header.py build/release/sata.uImage
 	python3 tools/check-fdt.py build/release/rescue.sata.dtb
 	bash tools/check-artifacts.sh build/release
@@ -75,6 +74,7 @@ test: validate
 	bash tests/test_verifiers.sh
 	bash tests/test_workflows.sh
 	bash tests/test_planning_count_guard.sh
+	bash tests/test_tools.sh
 	bash test-flash.sh
 
 clean:
