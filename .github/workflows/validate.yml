@@ -382,6 +382,28 @@ jobs:
           fi
           echo "no literal-device backup command in documentation: OK"
 
+          # The install target changed from "p20 only" to ONE btrfs spanning
+          # p20 + p21. Both planning documents still described the old contract
+          # for weeks afterwards - ROADMAP.md claimed a "p20-ориентированный
+          # установщик", and STRATEGY.md rated the install risk "низкий"
+          # precisely because it said "пишем только p20". Both were true when
+          # written and false when read.
+          #
+          # This is a CONTRACT check, not a count check. Counts drift and
+          # asserting them produces false alarms that train people to stop
+          # reading the guard; a superseded contract is unambiguous and stays
+          # wrong until someone edits the sentence.
+          stale=$(grep -nE 'пишем только p20|p20-ориентированный установщик|only p20|только `?p20`?' \
+                  ROADMAP.md STRATEGY.md docs/*.md 2>/dev/null \
+                  | grep -viE 'не |not |never|rather than|instead of|был|была|прежн|старо|~~' || true)
+          if [ -n "$stale" ]; then
+            echo "FAIL: documentation still describes the superseded p20-only target:" >&2
+            echo "$stale" | sed 's/^/      /' >&2
+            echo "      The install target is ONE btrfs spanning p20 + p21." >&2
+            exit 1
+          fi
+          echo "no superseded p20-only target described: OK"
+
       - name: Run repo layout test
         run: |
           bash tests/test_repo_layout.sh
@@ -394,6 +416,9 @@ jobs:
       # could only ever fail: this lane has been red since the step was added
       # and nothing about the code under test was involved.
       #
-      # It runs in build.yml, immediately after package-rescue.sh produces
-      # those artifacts. A synthetic stand-in was tried and rejected - faking
-      # a board to satisfy a board check is a green run that proves nothing.
+      # It is in the `test:` target of the Makefile, which build.yml and
+      # release.yml both run after building. Putting it in `make validate`
+      # was the original mistake: `make test` depends on `validate`, so a
+      # test that needs artifacts cannot live in the part that runs before
+      # them. A synthetic stand-in was tried and rejected - faking a board
+      # to satisfy a board check is a green run that proves nothing.
