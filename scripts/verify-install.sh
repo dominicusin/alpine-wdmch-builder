@@ -15,6 +15,19 @@ set -u
 
 TARGET="${1:-/}"
 LIVE=0
+
+# The members the installer is supposed to have created, read from install-alpine
+# rather than restated here. Two copies of this contract is how the verifier came
+# to accept a filesystem the installer would have refused: it was edited when the
+# installer was fixed and not when it was not. Derived from the installer on every
+# run, so the two cannot disagree.
+EXPECT_FS_DEVS="${EXPECT_FS_DEVS:-}"
+if [ -z "$EXPECT_FS_DEVS" ] && [ -r rootfs/install-alpine ]; then
+    _rp=$(sed -n 's/^ROOT_PART=\([0-9]*\).*/\1/p' rootfs/install-alpine | head -1)
+    _dp=$(sed -n 's/^DATA_PART=\([0-9]*\).*/\1/p' rootfs/install-alpine | head -1)
+    [ -n "$_dp" ] && EXPECT_FS_DEVS="p$_rp p$_dp" || EXPECT_FS_DEVS="p$_rp"
+    unset _rp _dp
+fi
 [ "$TARGET" = "/" ] && LIVE=1
 
 fails=0
@@ -127,10 +140,22 @@ if [ "$LIVE" -eq 1 ]; then
           # device count is asserted, not assumed.
           if [ "$typ" = "btrfs" ] && command -v btrfs >/dev/null 2>&1; then
               ndev=$(btrfs filesystem show "$rootdev" 2>/dev/null | grep -cE '^[[:space:]]*devid')
+              # Exactly the members the installer was asked to create, not "two
+              # or more". This said `*) pass` and so accepted a filesystem
+              # spanning p20, p21 and five partitions nobody intended, reporting
+              # "btrfs spans 7 devices" as a SUCCESS. The installer now dies
+              # unless the count matches exactly; the verifier that exists to
+              # confirm the install matched the contract was looser than the
+              # thing it verifies.
+              #
+              # Expected count read from install-alpine rather than restated, so
+              # the two cannot drift apart the way they just did.
+              want=$(set -- $EXPECT_FS_DEVS; echo $#)
               case "$ndev" in
                   ''|0) warn "could not count btrfs devices on $rootdev" ;;
                   1)    fail "the root filesystem has only ONE device - the install did not span p20 and p21" ;;
-                  *)    pass "btrfs spans $ndev devices" ;;
+                  "$want") pass "btrfs spans $ndev devices" ;;
+                  *)    fail "the root filesystem spans $ndev devices, want $want - it does not match the p20 + p21 target" ;;
               esac
               # A degraded filesystem mounts and boots, then fails on the first
               # write touching a lost device. Saying so is the value of the check.
