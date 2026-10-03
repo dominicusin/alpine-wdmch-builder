@@ -112,6 +112,14 @@ echo "manifest.json generated"
 
 # ---- 6. the full USB stick tree: ALL files at root + apks/ (offline Alpine install) ---
 echo ""
+# ALPINE_ARCH is needed by the repository layout below. Sourced HERE rather than
+# at step 7: the layout that needs it is built first, and under `set -u` an
+# unsourced $ALPINE_ARCH aborts the build rather than producing a flat repo.
+set -a
+# shellcheck disable=SC1091
+source config/alpine.env
+set +a
+
 echo "=== Building USB stick tree ($USB_TREE) ==="
 echo "  Structure: ALL boot files at root (NO boot/ directory)"
 rm -rf "$USB_TREE"
@@ -209,13 +217,47 @@ else
     exit 1
 fi
 
-# Ensure APKINDEX files are in apks/ (dl-packages.sh already copies them)
-if [ ! -f "$USB_TREE/apks/main/APKINDEX.tar.gz" ]; then
-    cp ".work/apk-cache-offline/main-APKINDEX.tar.gz" "$USB_TREE/apks/main/APKINDEX.tar.gz" 2>/dev/null || true
+# ---- lay the offline repository out the way apk.static requires -------------
+# apk opens <repo>/<arch>/APKINDEX.tar.gz and has NO fallback to
+# <repo>/APKINDEX.tar.gz. Proven by strace on the shipped apk.static under qemu:
+#
+#     openat(AT_FDCWD, "<repo>/aarch64/APKINDEX.tar.gz") = -1 ENOENT
+#
+# The download stages these FLAT (apks/main/*.apk), which is what a human would
+# guess. On the stick, that layout means apk finds nothing and every install
+# dies with "e2fsprogs (no such package)" - after the image was reported
+# complete and after every artifact check passed.
+#
+# The flat tree stays as the staging area; the stick gets apk's layout.
+# No copy step: image/dl-packages.sh already lays both repositories out at
+# apks/<repo>/<arch>/, which is exactly what apk.static opens. An earlier attempt
+# copied a flat tree into the arch level here, but USB_TREE *is* the staging
+# tree, so `cp` was copying a directory into itself and failing the build.
+mkdir -p "$USB_TREE/apks/main/$ALPINE_ARCH" "$USB_TREE/apks/community/$ALPINE_ARCH"
+
+# APKINDEX fallback, now into the arch directory apk actually reads
+if [ ! -f "$USB_TREE/apks/main/$ALPINE_ARCH/APKINDEX.tar.gz" ]; then
+    cp ".work/apk-cache-offline/main-APKINDEX.tar.gz" \
+       "$USB_TREE/apks/main/$ALPINE_ARCH/APKINDEX.tar.gz" 2>/dev/null || true
 fi
-if [ ! -f "$USB_TREE/apks/community/APKINDEX.tar.gz" ]; then
-    cp ".work/apk-cache-offline/community-APKINDEX.tar.gz" "$USB_TREE/apks/community/APKINDEX.tar.gz" 2>/dev/null || true
+if [ ! -f "$USB_TREE/apks/community/$ALPINE_ARCH/APKINDEX.tar.gz" ]; then
+    cp ".work/apk-cache-offline/community-APKINDEX.tar.gz" \
+       "$USB_TREE/apks/community/$ALPINE_ARCH/APKINDEX.tar.gz" 2>/dev/null || true
 fi
+
+# Fail here rather than ship a stick whose offline repo cannot be opened. This
+# is the defect above, guarded: the layout is now asserted, so a future change
+# that flattens it again fails the build instead of every install.
+for repo in main community; do
+    idx="$USB_TREE/apks/$repo/$ALPINE_ARCH/APKINDEX.tar.gz"
+    if [ ! -s "$idx" ]; then
+        echo "ERROR: $idx missing - apk.static cannot open this repository." >&2
+        echo "       It requires <repo>/<arch>/APKINDEX.tar.gz; the flat layout" >&2
+        echo "       it used to ship silently yields 'no such package' on the" >&2
+        echo "       WDMCH, after this image reported itself complete." >&2
+        exit 1
+    fi
+done
 
 echo ""
 echo "=== USB tree ready: $USB_TREE ==="

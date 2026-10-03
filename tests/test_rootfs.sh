@@ -27,11 +27,19 @@ sh -n "$ROOT/usr/local/sbin/verify-install" || {
 if [ -f "$PROJ_DIR/build/flash.zip" ]; then
     echo "Checking flash.zip package set matches the resolver closure"
     python3 - "$PROJ_DIR" <<'PY'
-import re, subprocess, sys, zipfile, os
+import glob, re, subprocess, sys, zipfile, os
 repo = sys.argv[1]
 idx = os.path.join(repo, "build/usb-tree-root/apks")
-main_i = os.path.join(idx, "main/APKINDEX.tar.gz")
-comm_i = os.path.join(idx, "community/APKINDEX.tar.gz")
+# The arch level is mandatory: apk.static opens <repo>/<arch>/APKINDEX.tar.gz
+# and has no flat fallback. Located by glob rather than hardcoded to "aarch64"
+# so the test does not go stale when ALPINE_ARCH does - and so it asserts the
+# SHAPE apk needs rather than one particular architecture name.
+def find_index(repo_dir):
+    hits = sorted(glob.glob(os.path.join(repo_dir, "*", "APKINDEX.tar.gz")))
+    return hits[0] if hits else None
+
+main_i = find_index(os.path.join(idx, "main"))
+comm_i = find_index(os.path.join(idx, "community"))
 # Both of these are hard failures, not skips. This guard exists to catch a
 # package that reached flash.zip without being in the closure; if the
 # resolver is broken or the offline repo was never built, the check cannot

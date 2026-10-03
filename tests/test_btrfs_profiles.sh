@@ -76,7 +76,7 @@ require() {
 sudo -n true 2>/dev/null || require "needs passwordless sudo for losetup"
 command -v qemu-aarch64 >/dev/null 2>&1 || \
     require "qemu-aarch64 not present, cannot run the aarch64 mkfs.btrfs"
-APK=$(ls build/usb-tree-root/apks/main/btrfs-progs-*.apk 2>/dev/null | head -1)
+APK=$(ls build/usb-tree-root/apks/main/*/btrfs-progs-*.apk 2>/dev/null | head -1)
 [ -n "$APK" ] || require "no btrfs-progs in build/usb-tree-root (run 'make package')"
 
 echo "=== btrfs profiles, with the shipped binary: $(basename "$APK") ==="
@@ -85,7 +85,7 @@ echo "=== btrfs profiles, with the shipped binary: $(basename "$APK") ==="
 rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 1
 PKGDIR=$OLDPWD
 for p in btrfs-progs musl libblkid libuuid libeconf zstd-libs lzo zlib eudev-libs; do
-    f=$(ls "$PKGDIR"/build/usb-tree-root/apks/main/$p-*.apk 2>/dev/null | head -1)
+    f=$(ls "$PKGDIR"/build/usb-tree-root/apks/main/*/$p-*.apk 2>/dev/null | head -1)
     [ -n "$f" ] || continue
     tar xzf "$f" 2>/dev/null
     for t in ./*.tar.gz; do [ -f "$t" ] && tar xzf "$t" 2>/dev/null; done

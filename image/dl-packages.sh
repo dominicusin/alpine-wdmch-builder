@@ -40,8 +40,17 @@ MAIN_URL="${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}/v${ALPINE_VERS
 COMMUNITY_URL="${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}/v${ALPINE_VERSION}/community/${ALPINE_ARCH}"
 MAIN_INDEX=".work/apk-cache-offline/main-APKINDEX.tar.gz"
 COMM_INDEX=".work/apk-cache-offline/community-APKINDEX.tar.gz"
-MAIN_DIR="build/usb-tree-root/apks/main"
-COMM_DIR="build/usb-tree-root/apks/community"
+# apk.static opens <repo>/<arch>/APKINDEX.tar.gz and has NO fallback to
+# <repo>/APKINDEX.tar.gz - proven by strace on the shipped binary under qemu:
+#     openat(AT_FDCWD, "<repo>/aarch64/APKINDEX.tar.gz") = -1 ENOENT
+#
+# These directories used to be FLAT (apks/main/*.apk), the shape a human would
+# guess. Every install on the real stick then died with "e2fsprogs (no such
+# package)" while the image itself reported itself complete. The arch level is
+# defined HERE, once, so the staging tree and the stick are the same layout and
+# there is no copy step that can drift between them.
+MAIN_DIR="build/usb-tree-root/apks/main/${ALPINE_ARCH}"
+COMM_DIR="build/usb-tree-root/apks/community/${ALPINE_ARCH}"
 
 [ -d "$MAIN_DIR" ] || mkdir -p "$MAIN_DIR"
 [ -d "$COMM_DIR" ] || mkdir -p "$COMM_DIR"
