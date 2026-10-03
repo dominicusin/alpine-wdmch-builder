@@ -104,7 +104,31 @@ else
     fi
 fi
 
-# --- 3. the SHIPPED artifact, which is what the operator actually gets -------
+# --- 3. the TREE is complete, not merely present --------------------------------
+# `[ -d build/usb-tree-root ]` cannot tell "never built" from "half destroyed".
+# During this work an `rm -rf build/usb-tree-root` followed by a bare
+# dl-packages.sh left a tree that EXISTED and had the repositories but none of
+# the boot files, and three tests reported it as damaged rather than as the thing
+# they needed. The set below is the one tools/prepare-usb.sh itself requires, so
+# the check and the consumer cannot drift.
+TREE=build/usb-tree-root
+if [ -d "$TREE" ]; then
+    missing=""
+    for f in sata.uImage rescue.sata.dtb rescue.root.sata.cpio.gz_pad.img \
+             SHA256SUMS manifest.json README.txt; do
+        [ -s "$TREE/$f" ] || missing="$missing $f"
+    done
+    check "the build tree carries every boot file prepare-usb.sh requires" \
+          "$([ -z "$missing" ] && echo 0 || echo 1)"
+    if [ -n "$missing" ]; then
+        echo "      missing:$missing"
+        echo "      the tree is PARTLY built - 'make package' completes it."
+        echo "      A test that only asks whether the directory exists cannot tell"
+        echo "      this apart from a tree that was never built."
+    fi
+fi
+
+# --- 4. the SHIPPED artifact, which is what the operator actually gets -------
 # The build tree and flash.zip are different things. A layout correct in build/
 # and flattened in the archive would pass everything above and still break every
 # install. So this reads the zip itself, the way an operator does.
