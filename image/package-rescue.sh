@@ -174,7 +174,7 @@ INSTALL ALPINE TO THE INTERNAL DISK (offline, no network needed)
 
 WHAT install-alpine WRITES
   Exactly two partitions: p20 (SYSTEM_B) + p21 (DATA), formatted as ONE
-  btrfs spanning both, label "wdmch-root", data profile single, no md RAID.
+  btrfs spanning both, label "@ROOT_LABEL@", data profile @BTRFS_DATA_PROFILE@, no md RAID.
   Both are destroyed. Back up p21 first if it holds anything.
   It does NOT create partitions and does NOT modify the partition table.
   Left untouched: p1 (firmware table), the A/B/GOLD firmware slots
@@ -199,6 +199,21 @@ SAFETY
   - Your data partitions (p22 DATA, p24 DISKVOLUME1) are NOT touched
   - To return to stock firmware: remove the USB stick, power cycle
 READMEEOF
+
+# The README above states the label and profile the installer will really use.
+# Those values were written out by hand, which is how this repository ends up
+# documenting a filesystem it does not create. They are substituted from
+# install-alpine - the single place they are defined - using explicit markers, so
+# the quoted heredoc stays quoted and nothing else in the text is expanded.
+_root_label=$(sed -n 's/^ROOT_LABEL="\(.*\)"/\1/p' rootfs/install-alpine | head -1)
+_data_profile=$(sed -n 's/^BTRFS_DATA_PROFILE=\(.*\)/\1/p' rootfs/install-alpine | head -1)
+if [ -z "$_root_label" ] || [ -z "$_data_profile" ]; then
+    echo "ERROR: could not read ROOT_LABEL/BTRFS_DATA_PROFILE from rootfs/install-alpine" >&2
+    exit 1
+fi
+sed -i "s|@ROOT_LABEL@|$_root_label|; s|@BTRFS_DATA_PROFILE@|$_data_profile|" \
+    "$USB_TREE/README.txt"
+unset _root_label _data_profile
 echo "README.txt written"
 
 # ---- 7. Alpine packages (use dl-packages.sh) ----------------------------------------

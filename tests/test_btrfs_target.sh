@@ -187,6 +187,33 @@ for doc in docs/RUNBOOK.md docs/INSTALL.md; do
           "$(printf '%s' "$scope" | grep -qE "written .p$rpart SYSTEM_B" && echo 1 || echo 0)"
 done
 
+# --- the ON-STICK README states the values the installer really uses ---------
+# README.txt is handed to the operator on the rescue stick. It carried its own
+# hand-written copy of the label and the data profile - a third and fourth place
+# the storage contract was written down, after install-alpine and 99-disk-root.
+# A stick that documents a filesystem it does not create is the failure mode this
+# repository keeps finding, so the text is now substituted from install-alpine
+# with explicit markers rather than typed.
+RT=$(mktemp -d)
+trap 'rm -rf "$RT"' EXIT
+if sed -n '/^cat > "\$USB_TREE\/README.txt"/,/^unset _root_label _data_profile$/p' \
+        image/package-rescue.sh > "$RT/_frag.sh" 2>/dev/null \
+   && grep -q '_root_label' "$RT/_frag.sh" 2>/dev/null; then
+    ( set -Eeuo pipefail; USB_TREE="$RT"; . "$RT/_frag.sh" ) >/dev/null 2>&1
+    check "the on-stick README renders" "$?"
+    check "  ...with no unsubstituted marker left behind" \
+          "$([ "$(grep -c '@ROOT_LABEL@\|@BTRFS_DATA_PROFILE@' "$RT/README.txt" 2>/dev/null)" -eq 0 ] && echo 0 || echo 1)"
+    check "  ...and it states the label install-alpine actually creates ($label)" \
+          "$(grep -q "$label" "$RT/README.txt" 2>/dev/null && echo 0 || echo 1)"
+    profile=$(sed -n 's/^BTRFS_DATA_PROFILE=\(.*\)/\1/p' rootfs/install-alpine | head -1)
+    check "  ...and the data profile install-alpine actually uses ($profile)" \
+          "$(grep -q "data profile $profile" "$RT/README.txt" 2>/dev/null && echo 0 || echo 1)"
+else
+    echo "  FAIL  could not extract the README block from package-rescue.sh"; FAILED=$((FAILED+1))
+fi
+check "no production script hardcodes the label outside the place that defines it" \
+      "$([ "$(grep -c '\"wdmch-root\"' scripts/verify-install.sh image/package-rescue.sh 2>/dev/null | grep -v ':0$' | wc -l)" -eq 0 ] && echo 0 || echo 1)"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "btrfs target: PASSED"

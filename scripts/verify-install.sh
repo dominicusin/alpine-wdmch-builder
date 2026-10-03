@@ -28,6 +28,13 @@ if [ -z "$EXPECT_FS_DEVS" ] && [ -r rootfs/install-alpine ]; then
     [ -n "$_dp" ] && EXPECT_FS_DEVS="p$_rp p$_dp" || EXPECT_FS_DEVS="p$_rp"
     unset _rp _dp
 fi
+
+# Same reasoning for the label: it had its own literal in the comparison below,
+# a third place the contract was written down after install-alpine and 99-disk-root.
+EXPECT_ROOT_LABEL="${EXPECT_ROOT_LABEL:-}"
+if [ -z "$EXPECT_ROOT_LABEL" ] && [ -r rootfs/install-alpine ]; then
+    EXPECT_ROOT_LABEL=$(sed -n 's/^ROOT_LABEL="\(.*\)"/\1/p' rootfs/install-alpine | head -1)
+fi
 [ "$TARGET" = "/" ] && LIVE=1
 
 fails=0
@@ -127,8 +134,8 @@ if [ "$LIVE" -eq 1 ]; then
         if [ -n "${rootdev:-}" ]; then
             lbl=$(blkid -s LABEL -o value "$rootdev" 2>/dev/null || true)
             typ=$(blkid -s TYPE  -o value "$rootdev" 2>/dev/null || true)
-            [ "$lbl" = "wdmch-root" ] && pass "root is $rootdev, $typ, label wdmch-root" \
-                                       || fail "root is $rootdev (label '$lbl', type '$typ') - expected label wdmch-root"
+            [ "$lbl" = "$EXPECT_ROOT_LABEL" ] && pass "root is $rootdev, $typ, label $EXPECT_ROOT_LABEL" \
+                                       || fail "root is $rootdev (label '$lbl', type '$typ') - expected label $EXPECT_ROOT_LABEL"
           else
               warn "could not determine the root device"
           fi
