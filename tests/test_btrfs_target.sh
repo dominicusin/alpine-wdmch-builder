@@ -152,6 +152,41 @@ else
     echo "  ok    no document describes the root filesystem as ext4"
 fi
 
+# --- the runbook and install doc must state the CURRENT contract --------------
+# docs/RUNBOOK.md opened with "Applies after install-alpine has written p20
+# SYSTEM_B" - the pre-btrfs, single-partition contract - while the body had
+# already been updated to describe a two-device btrfs. A reader who trusted the
+# first line would look for a filesystem that is no longer what gets created.
+#
+# Existence and path checks cannot catch that: the file was present, and every
+# path in it was real. So the check here is a RELATIONSHIP - each doc that
+# describes the install target must name the label and both partitions, read
+# from install-alpine rather than restated, so the doc cannot drift from the
+# installer by going stale in a different direction.
+label=$(sed -n 's/^ROOT_LABEL="\(.*\)"/\1/p' rootfs/install-alpine | head -1)
+rpart=$(sed -n 's/^ROOT_PART=\([0-9]*\)/\1/p' rootfs/install-alpine | head -1)
+dpart=$(sed -n 's/^DATA_PART=\([0-9]*\)/\1/p' rootfs/install-alpine | head -1)
+[ -n "$label" ] && [ -n "$rpart" ] && [ -n "$dpart" ] || {
+    echo "  FAIL  could not read the contract out of install-alpine"; FAILED=$((FAILED+1)); }
+
+for doc in docs/RUNBOOK.md docs/INSTALL.md; do
+    [ -f "$doc" ] || { echo "  FAIL  $doc missing"; FAILED=$((FAILED+1)); continue; }
+    # A doc that describes the target must name the label and BOTH partitions.
+    # Only the lines that talk about the target are considered, so prose about
+    # unrelated partitions cannot satisfy or break this by accident.
+    scope=$(grep -nE 'p2[01]|wdmch-root|SYSTEM_B' "$doc" | head -20)
+    if [ -z "$scope" ]; then
+        check "$doc describes the install target" 1
+        continue
+    fi
+    check "$doc names the filesystem label the installer creates ($label)" \
+          "$(printf '%s' "$scope" | grep -q "$label" && echo 0 || echo 1)"
+    check "  ...and both member partitions (p$rpart + p$dpart)" \
+          "$(printf '%s' "$scope" | grep -qE "p$rpart" && printf '%s' "$scope" | grep -qE "p$dpart" && echo 0 || echo 1)"
+    check "  ...and does not still describe the old p$rpart-only contract" \
+          "$(printf '%s' "$scope" | grep -qE "written .p$rpart SYSTEM_B" && echo 1 || echo 0)"
+done
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "btrfs target: PASSED"

@@ -1,7 +1,8 @@
 # Runbook: first boot and acceptance
 
-Applies after `install-alpine` has written `p20 SYSTEM_B` and the box has
-been rebooted. Read `ROADMAP.md` for the staged validation this follows.
+Applies after `install-alpine` has written the single btrfs spanning `p20` +
+`p21` (label `wdmch-root`) and the box has been rebooted. Read `ROADMAP.md` for
+the staged validation this follows.
 
 This document has two parts with very different confidence, and the
 difference matters:
