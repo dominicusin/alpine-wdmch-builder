@@ -47,31 +47,39 @@ FAILED=0
 
 check() { if [ "$2" -eq 0 ]; then echo "  ok    $1"; else echo "  FAIL  $1"; FAILED=$((FAILED+1)); fi; }
 
-# --- can this host do the test at all? ---------------------------------------
-if ! sudo -n true 2>/dev/null; then
-    echo "  SKIP: needs passwordless sudo for losetup"
-    echo "        (the profile rationale is then unverified on this host)"
+# --- opt-in gate -------------------------------------------------------------
+# Deliberately NOT phrased as a skip, and deliberately not one: this check was
+# never enabled, so there is nothing to report a result for. When it IS enabled,
+# everything below is a hard failure - see require().
+if [ "${WDMCH_VERIFY_FS:-0}" != "1" ]; then
+    echo "  NOT RUN: this check formats devices. It is opt-in on purpose."
+    echo "          Deliberately: make verify-fs"
     exit 0
 fi
-if ! command -v qemu-aarch64 >/dev/null 2>&1; then
-    echo "  SKIP: qemu-aarch64 not present, cannot run the aarch64 mkfs.btrfs"
-    exit 0
-fi
+
+# From here the caller asked for a real answer. Anything that stops this host
+# from producing one is a FAILURE.
+#
+# The first version of this file exited 0 from each capability check, which is
+# the defect the CI fail-open guard exists to catch: ask for the check, have it
+# decline, and read the exit status as "the profile is fine". On a host without
+# passwordless sudo - which is every CI runner - that is precisely the run where
+# nobody would otherwise learn that the btrfs profile went unverified.
+require() {
+    echo "  FAIL  $1" >&2
+    echo "        enabled via WDMCH_VERIFY_FS=1, so this is a failure, not a skip:" >&2
+    echo "        an unrun check is not a passing check." >&2
+    FAILED=$((FAILED+1))
+    exit 1
+}
+
+sudo -n true 2>/dev/null || require "needs passwordless sudo for losetup"
+command -v qemu-aarch64 >/dev/null 2>&1 || \
+    require "qemu-aarch64 not present, cannot run the aarch64 mkfs.btrfs"
 APK=$(ls build/usb-tree-root/apks/main/btrfs-progs-*.apk 2>/dev/null | head -1)
-[ -n "$APK" ] || { echo "  SKIP: no btrfs-progs in build/usb-tree-root (run 'make package')"; exit 0; }
+[ -n "$APK" ] || require "no btrfs-progs in build/usb-tree-root (run 'make package')"
 
 echo "=== btrfs profiles, with the shipped binary: $(basename "$APK") ==="
-
-# --- opt-in gate -------------------------------------------------------------
-# Placed after the host-capability probes so an unrunnable host reports WHY it
-# cannot run, rather than looking like a silent skip of a check nobody asked for.
-if [ "${WDMCH_VERIFY_FS:-0}" != "1" ]; then
-    echo "  NOT RUN: this check creates filesystems on loop devices."
-    echo "           It is opt-in on purpose. Run it deliberately with:"
-    echo "               make verify-fs"
-    echo "           or: WDMCH_VERIFY_FS=1 bash tests/test_btrfs_profiles.sh"
-    exit 0
-fi
 
 # --- unpack the binary and every library the closure provides ----------------
 rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 1
@@ -84,17 +92,14 @@ for p in btrfs-progs musl libblkid libuuid libeconf zstd-libs lzo zlib eudev-lib
 done
 MKFS="$W/sbin/mkfs.btrfs"
 BTRFS="$W/sbin/btrfs"
-[ -x "$MKFS" ] || { echo "  SKIP: mkfs.btrfs not unpacked from the APK"; exit 0; }
+[ -x "$MKFS" ] || require "mkfs.btrfs did not unpack from the APK"
 run() { sudo -n qemu-aarch64 -L "$W" "$@" 2>&1; }
 
 # --- two loop devices --------------------------------------------------------
 truncate -s 512M d1; truncate -s 512M d2
 L1=$(sudo -n losetup -f --show "$W/d1" 2>/dev/null)
 L2=$(sudo -n losetup -f --show "$W/d2" 2>/dev/null)
-if [ -z "$L1" ] || [ ! -b "$L1" ]; then
-    echo "  SKIP: losetup could not attach a device"
-    exit 0
-fi
+[ -n "$L1" ] && [ -b "$L1" ] || require "losetup could not attach a device"
 cleanup() { sudo -n losetup -d "$L1" 2>/dev/null; sudo -n losetup -d "$L2" 2>/dev/null; rm -rf "$W"; }
 trap cleanup EXIT
 

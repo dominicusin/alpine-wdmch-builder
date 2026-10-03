@@ -63,6 +63,7 @@ test: validate
 	bash tests/test_in_use_partition.sh
 	bash tests/test_btrfs_target.sh
 	bash tests/test_btrfs_profiles.sh
+	bash tests/test_optin_failclosed.sh
 	bash tests/test_seams.sh
 	bash tests/test_syntax.sh
 	bash tests/test_prepare_usb.sh
