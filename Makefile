@@ -85,6 +85,7 @@ test: validate
 	bash tests/test_backup_fw.sh
 	bash tests/test_verifiers.sh
 	bash tests/test_workflows.sh
+	bash tests/test_release_audit.sh
 	bash tests/test_planning_count_guard.sh
 	bash tests/test_tools.sh
 	bash test-flash.sh
