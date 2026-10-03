@@ -105,6 +105,49 @@ sys.exit(0)
 PY
 check "every validate.yml step has a non-empty run body" "$?"
 
+# --- 4. a test entry must not silently lose its arguments --------------------
+# My own defect, committed and green for three commits: a rewrite of the
+# Makefile dropped the arguments from
+#
+#     bash tests/test_rootfs.sh build/rootfs $$(cat ...)
+#
+# leaving `bash tests/test_rootfs.sh`. The suite then died with
+# "1: $1: не заданы границы переменной" - which prints no "FAIL", so a gate
+# counting FAIL lines read 0 and reported success.
+#
+# Any test that reads a positional parameter must be invoked with it. Detected
+# by reading the test, not by running the suite, so it fires at commit time.
+echo
+echo "  (positional parameters must survive into the Makefile)"
+bad=""
+while IFS= read -r t; do
+    base=$(basename "$t")
+    # does the test dereference $1..$9 under set -u?
+    # grep -c already prints 0 when nothing matches, and exits non-zero. The
+    # `|| echo 0` would then print a SECOND 0 and break the comparison below.
+    uses=$(grep -cE '^\s*[A-Z_]+="?\$\{?[1-9]' "$t" 2>/dev/null)
+    uses=${uses:-0}
+    [ "$uses" -gt 0 ] || continue
+    line=$(grep -F "bash $base" Makefile 2>/dev/null | head -1)
+    if [ -z "$line" ]; then
+        continue                      # not run from make test at all
+    fi
+    # a bare invocation with nothing after the script name is the defect
+    case "$(printf '%s' "$line" | sed 's/^[[:space:]]*//')" in
+        "bash $base"|"bash $base "*)
+            # "bash $base " with trailing space is fine; exact-match is not
+            case "$(printf '%s' "$line" | sed 's/[[:space:]]*$//')" in
+                "bash $base") bad="$bad $base" ;;
+            esac ;;
+    esac
+done < <(ls tests/*.sh 2>/dev/null)
+check "every test that needs arguments is given them in the Makefile${bad:+ (bare:$bad)}" \
+      "$([ -z "$bad" ] && echo 0 || echo 1)"
+
+# And the specific case that was broken, named so a regression is unmistakable.
+check "tests/test_rootfs.sh is invoked with its ROOT and RELEASE arguments" \
+      "$(grep -qE 'bash tests/test_rootfs\.sh[[:space:]]+build/rootfs' Makefile && echo 0 || echo 1)"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ci guards: PASSED"
