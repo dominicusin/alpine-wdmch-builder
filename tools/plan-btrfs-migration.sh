@@ -40,7 +40,10 @@ set -u
 DISK_A=${DISK_A:-/dev/sda20}     # 20 GB, currently the md1 member / root
 DISK_B=${DISK_B:-/dev/sda21}     # 7.3 TB, currently the DATA btrfs
 DATA_MOUNT=${DATA_MOUNT:-/data}
-ROOT_LABEL=${ROOT_LABEL:-SYSTEM}
+# The label the CURRENT installer creates. An earlier version defaulted to
+# SYSTEM, the pre-btrfs name, and then planned against that stale value.
+ROOT_LABEL=${ROOT_LABEL:-wdmch-root}
+NEW_ROOT_LABEL=$ROOT_LABEL
 NEW_LABEL=${NEW_LABEL:-WDMCROOT}
 
 pass() { echo "  ok    $*"; }
@@ -157,42 +160,49 @@ PLAN
      Do not skip this. The vendor loader cannot boot the internal disk; if the
      migration goes wrong the only way back in is the rescue stick.
 
-  2. Add $DISK_A to the existing btrfs (run from rescue, / NOT mounted):
-       btrfs device add $DISK_A $DATA_MOUNT
-       btrfs balance start --max-size=1G $DATA_MOUNT
-     This keeps every byte already on $DISK_B - /nix, /guix, /home, /var and
-     the rest - in place. Nothing is copied and nothing is lost.
+   2. Format BOTH partitions as ONE new filesystem. This is what
+      rootfs/install-alpine does; do not hand-roll it.
 
-  3. Change the profile so capacity is not capped by the 20 GB device:
-       btrfs balance start --convert=single $DATA_MOUNT   # data
-       (metadata stays duplicated across both devices)
+        mkfs.btrfs -f -d single -m raid1 -L $NEW_ROOT_LABEL \
+            $DISK_A $DATA_MOUNT_DEV
 
-  4. Place the old root as a subvolume:
-       btrfs subvolume create $DATA_MOUNT/rootfs
-       rsync -aAXH --numeric-ids / $DATA_MOUNT/rootfs/
-     then remove the -x mountpoints that must not be recursed into:
-       for m in data home var srv tmp opt nix guix root local src games; do
-           umount /$m 2>/dev/null || true
-       done
+      $DATA_MOUNT_DEV is /dev/sda21, NOT the /data mountpoint. Read it from
+      findmnt, never guess:
+        DATA_MOUNT_DEV=$(findmnt -no SOURCE /data | sed 's/\[.*\]//')
 
-  5. POINT THE BOOT AT IT. /etc/fstab root line changes from
-       LABEL="$ROOT_LABEL"  /  ext4
-     to a btrfs subvolume:
-       LABEL=DATA  /  btrfs  subvol=/rootfs,defaults  0  1
-     (or a dedicated label via btrfs subvolume set-default)
+      -d single on data: a RAID1 data profile across a 20 GiB device and a
+      7.3 TiB device caps usable space at the smaller member.
+      -m raid1 on metadata: mirrored across both members, so losing either one
+      leaves the filesystem mountable and scrubbable.
 
-  6. REBUILD THE INITRAMFS on the rescue image so it can mount btrfs and find
-     the root by label. There is currently no initrd on $DISK_A - /boot is
-     empty - so this is a new piece of work, not a rebuild.
+   3. RUN THE INSTALLER, which formats, populates and writes the fstab:
+        /media/usb/rootfs/install-alpine
 
-  7. REMOVE md1 once nothing depends on it:
-       mdadm --stop /dev/md1      (needs mdadm, which is not installed)
-     Verify nothing references $ROOT_LABEL afterwards.
+      It refuses to run while either partition is in use, if the factory GPT is
+      absent, or if the rescue stick is missing. All three are true right now,
+      because md1 is still live. That refusal is correct, and it is why this
+      plan cannot be executed from the running system at all.
 
-  8. VERIFY BEFORE REBOOTING:
-       btrfs filesystem usage $DATA_MOUNT
-       btrfs subvolume list $DATA_MOUNT
-       btrfs scrub status $DATA_MOUNT
+   4. Only after the installer reports success: remove md1.
+        mdadm --stop /dev/md1
+      Do NOT assemble it again. Nothing new on this machine uses md; the array
+      belonged to the system being replaced.
+
+   5. VERIFY BEFORE REBOOTING:
+        btrfs filesystem show /mnt/install   # must list TWO devices
+        btrfs filesystem usage /mnt/install
+        blkid $DISK_A $DATA_MOUNT_DEV       # same UUID on both, label $NEW_ROOT_LABEL
+
+   WHAT THIS PLAN DESTROYS
+      Everything currently on $DISK_A and $DATA_MOUNT_DEV - /nix, /guix, /home,
+      /var and whatever /data holds. Step 1 is not optional.
+
+   WHAT THIS PLAN DOES NOT DO
+      It does not reuse the existing filesystem on /data, does not rsync a live
+      system onto it, and does not make / a subvolume of it. An earlier version
+      of this file proposed all three and was wrong: it preserved the old layout
+      at the cost of the one this project actually ships.
+
 
 ROLLBACK
   Steps 2-3 are additive and reversible (btrfs device delete).

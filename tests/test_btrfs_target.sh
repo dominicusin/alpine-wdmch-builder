@@ -164,6 +164,7 @@ fi
 # from install-alpine rather than restated, so the doc cannot drift from the
 # installer by going stale in a different direction.
 label=$(sed -n 's/^ROOT_LABEL="\(.*\)"/\1/p' rootfs/install-alpine | head -1)
+dprofile=$(sed -n 's/^BTRFS_DATA_PROFILE=//p' rootfs/install-alpine | head -1)
 rpart=$(sed -n 's/^ROOT_PART=\([0-9]*\)/\1/p' rootfs/install-alpine | head -1)
 dpart=$(sed -n 's/^DATA_PART=\([0-9]*\)/\1/p' rootfs/install-alpine | head -1)
 [ -n "$label" ] && [ -n "$rpart" ] && [ -n "$dpart" ] || {
@@ -213,6 +214,42 @@ else
 fi
 check "no production script hardcodes the label outside the place that defines it" \
       "$([ "$(grep -c '\"wdmch-root\"' scripts/verify-install.sh image/package-rescue.sh 2>/dev/null | grep -v ':0$' | wc -l)" -eq 0 ] && echo 0 || echo 1)"
+
+# --- the migration plan must describe the SAME architecture -------------------
+# tools/plan-btrfs-migration.sh predated the contract change and proposed the
+# opposite: add p20 to the existing filesystem on /data, rsync the live root into
+# a /rootfs subvolume, point fstab at the old DATA label, and remove md1 last.
+# It is the only migration plan in the repository, it is not referenced by
+# anything, and following it would have migrated the machine the wrong way.
+#
+# A plan that contradicts the contract is worse than no plan, so the two are
+# bound here: the plan must name the same label, the same profiles, and must not
+# propose reusing the filesystem the installer replaces.
+PLAN=tools/plan-btrfs-migration.sh
+if [ -f "$PLAN" ]; then
+    check "the migration plan names the label the installer creates" \
+          "$(grep -qE 'ROOT_LABEL:-wdmch-root|\-L \$NEW_ROOT_LABEL' "$PLAN" && echo 0 || echo 1)"
+    check "  ...and not the superseded SYSTEM label" \
+          "$(grep -q 'ROOT_LABEL:-SYSTEM' "$PLAN" && echo 1 || echo 0)"
+    check "  ...it uses the installer's data profile ($dprofile)" \
+          "$(grep -qE -- "-d \$?[A-Z_]*DATA_PROFILE|\-d single" "$PLAN" && echo 0 || echo 1)"
+    check "  ...and the installer's metadata profile" \
+          "$(grep -qE -- '-m raid1' "$PLAN" && echo 0 || echo 1)"
+    check "  ...it formats BOTH partitions as one filesystem" \
+          "$(grep -A1 'mkfs\.btrfs -f -d ' "$PLAN" | grep -qE '\$DISK_A +\$DATA_MOUNT_DEV' && echo 0 || echo 1)"
+    check "  ...and does not propose adding a device to the filesystem on /data" \
+          "$(grep -q 'btrfs device add' "$PLAN" && echo 1 || echo 0)"
+    check "  ...nor rsyncing a live system into a subvolume of it" \
+          "$(grep -q 'rsync -aAXH --numeric-ids /' "$PLAN" && echo 1 || echo 0)"
+    check "  ...nor pointing the boot at the old filesystem" \
+          "$(grep -qE '^\s*LABEL=DATA\s+/\s+btrfs' "$PLAN" && echo 1 || echo 0)"
+    check "  ...it defers to the installer rather than hand-rolling the install" \
+          "$(grep -q 'install-alpine' "$PLAN" && echo 0 || echo 1)"
+    check "  ...and it says what the plan destroys" \
+          "$(grep -qi 'destroys' "$PLAN" && echo 0 || echo 1)"
+else
+    echo "  FAIL  $PLAN missing"; FAILED=$((FAILED+1))
+fi
 
 echo
 if [ "$FAILED" -eq 0 ]; then
