@@ -6,7 +6,7 @@
 #     run 37096190543 on 58a6bf4
 #       Reject hardcoded absolute home paths -> FAIL
 #
-# tests/test_release_audit.sh carried `cd /home/dominicusin/src/alpine-wdmch-builder`.
+# tests/test_release_audit.sh carried an absolute `cd` into one developer's home.
 # The guard that caught it is a one-line `git grep` in .github/workflows/validate.yml
 # and exists in NO test. So it can only fail after the commit is pushed - which is
 # the worst possible time, and it has now cost a CI cycle.
@@ -46,7 +46,11 @@ check "  ...and validate.yml still runs that same check" \
 # The guard must actually reject a planted absolute path, or it is decorative.
 PLANT=tests/.homepath-probe.tmp
 trap 'rm -f "$PLANT"' EXIT
-printf '#!/bin/sh\ncd /home/someone/else/project\n' > "$PLANT"
+# The literal is assembled at runtime. Written out in the source, this line
+# would itself match the guard once the file is tracked - which is exactly what
+# happened on the first run: the test failed on its own documentation.
+_probe_home="/home/some""one/else/project"
+printf '#!/bin/sh\ncd %s\n' "$_probe_home" > "$PLANT"
 git add -f "$PLANT" >/dev/null 2>&1
 check "  ...and it REJECTS one when planted" \
       "$(home_guard && echo 0 || echo 1)"
