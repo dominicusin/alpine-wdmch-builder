@@ -28,6 +28,11 @@ WF=.github/workflows/validate.yml
 
 echo "=== guards that used to run only in CI ==="
 
+# Scratch space for this run. Created here rather than in whichever block needs
+# it first: an earlier version created it inside a subshell, and the later awk
+# program that writes into it hit "AW: unbound variable" under `set -u`.
+AW=$(mktemp -d)
+
 # --- 1. no hardcoded absolute home paths -------------------------------------
 # The exact command validate.yml runs, so the two cannot disagree.
 # git grep PRINTS its matches. Left unredirected that output lands in the
@@ -45,7 +50,7 @@ check "  ...and validate.yml still runs that same check" \
 
 # The guard must actually reject a planted absolute path, or it is decorative.
 PLANT=tests/.homepath-probe.tmp
-trap 'rm -f "$PLANT"' EXIT
+trap 'rm -rf "$AW"; rm -f "$PLANT"' EXIT
 # The literal is assembled at runtime. Written out in the source, this line
 # would itself match the guard once the file is tracked - which is exactly what
 # happened on the first run: the test failed on its own documentation.
@@ -151,10 +156,10 @@ check "tests/test_rootfs.sh is invoked with its ROOT and RELEASE arguments" \
 # --- 5. the vacuous-test guard, which also lived only in CI ------------------
 # validate.yml rejects a test that can report success without testing anything.
 # Two shapes: conditional bail-out language immediately above a zero-status
-# return, and `|| echo WARNING` on a command whose failure matters. Three such
-# tests existed here - the flash.zip closure guard that bailed when the resolver
-# failed, and the QEMU smoke test that bailed without qemu and only warned when
-# BusyBox would not run.
+# return, and a failure branch that only prints a warning instead of exiting
+# non-zero. Three such tests existed here - the flash.zip closure guard that bailed
+# when the resolver failed, and the QEMU smoke test that bailed without qemu and
+# only warned when BusyBox would not run.
 #
 # The wording above is deliberately chosen. An earlier version of this comment
 # described the first shape by naming it, and the guard below then matched its
@@ -279,6 +284,36 @@ check "  ...the documented DEBUGGING.md exception still exists" \
       "$(grep -q 'unpack_from' docs/DEBUGGING.md && echo 0 || echo 1)"
 check "  ...and check-image-header.py is still the single implementation" \
       "$(grep -q 'unpack_from' tools/check-image-header.py && echo 0 || echo 1)"
+
+# The local copy above filters comment lines. validate.yml's does NOT - it is
+# unfiltered. That divergence is itself the defect: this file passed locally and
+# failed in CI on exactly the comment above, and the local run was the laxer one,
+# so it could not catch what CI would.
+#
+# CI's unfiltered form therefore runs here too. If it ever rejects something this
+# test fails at commit time rather than at the next push, which is the whole
+# point of porting the guard at all.
+cat > "$AW/vacuous.awk" <<'AWKEOF'
+/skip|not found|unavailable|could not/ { sk = NR }
+/^[[:space:]]*exit 0/ {
+  if (sk && NR - sk <= 2) { print FILENAME ":" NR }
+}
+/\|\|[[:space:]]*echo/ && /WARNING|skip|could not/ {
+  print FILENAME ":" NR
+}
+AWKEOF
+
+CI_VACUOUS=$(for f in $(git ls-files 'tests/*.sh' 'tools/*.sh' test-flash.sh 2>/dev/null); do
+    [ -f "$f" ] || continue
+    awk -f "$AW/vacuous.awk" "$f"
+done)
+check "validate.yml's UNFILTERED form of that guard also passes here" \
+      "$([ -z "$CI_VACUOUS" ] && echo 0 || echo 1)"
+if [ -n "$CI_VACUOUS" ]; then
+    echo "      validate.yml would reject these; this file passed locally:"
+    printf '%s\n' "$CI_VACUOUS" | head -5 | sed 's/^/        /'
+    echo "      The two forms have diverged. CI runs the unfiltered one."
+fi
 
 echo
 if [ "$FAILED" -eq 0 ]; then
