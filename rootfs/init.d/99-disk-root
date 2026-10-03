@@ -19,12 +19,24 @@
 ROOT_LABEL=${ROOT_LABEL:-wdmch-root}
 NEWROOT=${NEWROOT:-/newroot}
 USB_ROOT=${USB_ROOT:-/media/usb}
+
 # btrfs needs the subvolume at mount time. It cannot be read from the installed
 # system before that system is mounted, which is exactly why the installer puts
 # the system in the TOP-LEVEL subvolume: this default is then always correct and
 # the label alone identifies the filesystem. Overridable only for a future
 # install that uses a named subvolume.
 ROOT_SUBVOL=${ROOT_SUBVOL:-/}
+# The btrfs mount options, defined ONCE. Both mount paths - the label lookup and
+# the fallback scan - must agree: compress= sets the DEFAULT compression for new
+# writes, so a root found by the scan was silently uncompressed while the same
+# root found by its label was compressed. That difference would depend on which
+# path ran, not on what was installed.
+#
+# compress=zstd is safe to request unconditionally: in 6.18 CONFIG_BTRFS_FS
+# itself selects ZSTD_COMPRESS/ZSTD_DECOMPRESS, so asking for btrfs already
+# brings zstd with it. It is a default for new writes, never a mount failure -
+# an existing filesystem mounts whether or not it is given.
+BTRFS_MOUNT_OPTS=${BTRFS_MOUNT_OPTS:-subvol=${ROOT_SUBVOL:-/},compress=zstd}
 MOUNTS=${MOUNTS:-/proc/mounts}
 RESCUE_SSH_KEY=${RESCUE_SSH_KEY:-/root/.ssh/authorized_keys}
 
@@ -68,7 +80,11 @@ fi
 # PARTLABEL so a future slot cannot be reintroduced by adding a line here.
 if [ -z "$candidate" ]; then
   say "no filesystem labelled $ROOT_LABEL - scanning the WDMCH layout"
-for p in /dev/sda20 /dev/sda19 /dev/sda21 /dev/sda22 /dev/sda24; do
+# SCAN_PARTS is overridable for the same reason MOUNTS is: the loop below tests
+# `[ -b "$p" ]`, which no synthetic path can satisfy, so the scan was previously
+# unreachable from a test - the one path that mounts WITHOUT the label was the
+# one path nothing could execute.
+for p in ${SCAN_PARTS:-/dev/sda20 /dev/sda19 /dev/sda21 /dev/sda22 /dev/sda24}; do
     [ -b "$p" ] || continue
     [ "$p" = "$candidate" ] && continue
     plabel=""
@@ -81,7 +97,7 @@ for p in /dev/sda20 /dev/sda19 /dev/sda21 /dev/sda22 /dev/sda24; do
            continue ;;
     esac
     if mkdir -p "$NEWROOT" \
-       && { mount -t btrfs -o "subvol=${ROOT_SUBVOL:-/}" "$p" "$NEWROOT" 2>/dev/null \
+       && { mount -t btrfs -o "$BTRFS_MOUNT_OPTS" "$p" "$NEWROOT" 2>/dev/null \
             || mount -t ext4 "$p" "$NEWROOT" 2>/dev/null; }; then
         if [ -x "$NEWROOT/sbin/init" ] || [ -x "$NEWROOT/init" ] \
            || [ -x "$NEWROOT/usr/sbin/init" ] || [ -x "$NEWROOT/lib/systemd/systemd" ]; then
@@ -95,7 +111,7 @@ fi
 
 if [ -z "$candidate" ]; then
     say "no installed system found - staying in the rescue shell"
-    say "(expected an ext4 filesystem labelled $ROOT_LABEL, normally p20 / SYSTEM_B)"
+    say "(expected a btrfs filesystem labelled $ROOT_LABEL across p20 + p21)"
     exit 0
 fi
 
@@ -111,7 +127,7 @@ fi
 # staring at a rescue shell on a machine that had installed perfectly well.
 mkdir -p "$NEWROOT"
 if ! is_mounted "$NEWROOT"; then
-    if ! mount -t btrfs -o "subvol=${ROOT_SUBVOL:-/},compress=zstd" "$candidate" "$NEWROOT" 2>/dev/null; then
+    if ! mount -t btrfs -o "$BTRFS_MOUNT_OPTS" "$candidate" "$NEWROOT" 2>/dev/null; then
         # Fall back to auto-detection rather than giving up: an older install
         # from before the btrfs change is still ext4.
         if ! mount -t ext4 "$candidate" "$NEWROOT" 2>/dev/null; then

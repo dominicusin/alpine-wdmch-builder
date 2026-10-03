@@ -96,9 +96,17 @@ check "  ...and it does not re-mount an already-mounted new root" \
 
 # --- 3. no marker, no filesystem at all: stay put -----------------------------
 setup_none() { : > "$W/findfs"; }   # findfs finds nothing; no block devices exist
-run "none" none
+run "none" setup_none
 check "no installed system leaves the rescue shell intact" \
       "$(cond '[ $SWITCHED -eq 0 ]'; echo $?)"
+# The message the operator sees here must name the filesystem this project
+# actually installs. It still said "an ext4 filesystem ... p20 / SYSTEM_B" after
+# the move to a single btrfs across p20 + p21 - so the one diagnostic that fires
+# exactly when an operator is lost described a contract that no longer exists.
+check "the no-root-found message names btrfs, not ext4" \
+      "$(cond 'case "$OUT" in *"btrfs filesystem labelled"*) true ;; *) false ;; esac'; echo $?)"
+check "  ...and does not claim the old p20/SYSTEM_B contract" \
+      "$(cond 'case "$OUT" in *"SYSTEM_B"*) false ;; *) true ;; esac'; echo $?)"
 check "  ...and names what it was looking for" \
       "$(cond 'case "$OUT" in *wdmch-root*) true ;; *) false ;; esac'; echo $?)"
 
@@ -142,6 +150,48 @@ setup_haskey() {
 run "haskey" haskey
 check "an existing key produces no credential-copy warning" \
       "$(cond 'case "$OUT" in *"NO SSH key"*) false ;; *) true ;; esac'; echo $?)"
+
+# --- 8. both btrfs mount paths use the SAME options --------------------------
+# compress= sets the DEFAULT compression for new writes. The label path asked
+# for compress=zstd and the fallback scan did not, so the same installed system
+# was compressed or not depending on which path happened to find it. Nothing
+# reported a failure either way - the filesystem mounted in both cases.
+# The scan tests `[ -b "$p" ]`, and no synthetic path can satisfy it, so the
+# scan needed a real block device. A loop device is the established pattern in
+# this suite (test_btrfs_profiles.sh) and is released on exit.
+SCAN_LOOP=""
+setup_scan() {
+    newroot_with_init
+    # findfs finds nothing, so the handler falls through to scanning partitions
+    rm -f "$W/findfs"
+    if [ -z "${SCAN_LOOP:-}" ]; then
+        truncate -s 16M "$W/scan.img"
+        SCAN_LOOP=$(sudo -n losetup -f --show "$W/scan.img" 2>/dev/null) || SCAN_LOOP=""
+    fi
+    [ -n "$SCAN_LOOP" ] || { SCAN_PARTS=""; return 0; }   # unprivileged: skipped below
+    export SCAN_PARTS="$SCAN_LOOP"
+}
+run "scanopts" scan
+btrfs_opts=$(grep -m1 -- '-t btrfs' "$W/mounts.log" 2>/dev/null | sed 's/.*-o \([^ ]*\).*/\1/')
+if [ -z "${SCAN_LOOP:-}" ]; then
+    echo "  (skip: needs passwordless sudo for a loop device to be a -b candidate)"
+else
+check "the fallback scan mounts btrfs with compression" \
+      "$(cond '[ -n "$btrfs_opts" ]; case "$btrfs_opts" in *compress=*) true ;; *) false ;; esac'; echo $?)"
+
+setup_label() {
+    newroot_with_init
+    : > "$W/findfs"; echo /dev/sda20 > "$W/findfs"
+}
+run "labelopts" label
+label_opts=$(grep -m1 -- '-t btrfs' "$W/mounts.log" 2>/dev/null | sed 's/.*-o \([^ ]*\).*/\1/')
+check "the label path mounts btrfs with the SAME options as the scan" \
+      "$(cond '[ "$btrfs_opts" = "$label_opts" ]'; echo $?)"
+check "  ...and it is the documented default, not an accident" \
+      "$(cond '[ "$label_opts" = "subvol=/,compress=zstd" ]'; echo $?)"
+fi
+if [ -n "${SCAN_LOOP:-}" ]; then sudo -n losetup -d "$SCAN_LOOP" 2>/dev/null; SCAN_LOOP=""; fi
+
 
 echo
 if [ "$FAILED" -eq 0 ]; then
