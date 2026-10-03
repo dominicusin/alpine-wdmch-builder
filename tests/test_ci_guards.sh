@@ -148,6 +148,92 @@ check "every test that needs arguments is given them in the Makefile${bad:+ (bar
 check "tests/test_rootfs.sh is invoked with its ROOT and RELEASE arguments" \
       "$(grep -qE 'bash tests/test_rootfs\.sh[[:space:]]+build/rootfs' Makefile && echo 0 || echo 1)"
 
+# --- 5. the vacuous-test guard, which also lived only in CI ------------------
+# validate.yml rejects a test that can report success without testing anything.
+# Two shapes: conditional bail-out language immediately above a zero-status
+# return, and `|| echo WARNING` on a command whose failure matters. Three such
+# tests existed here - the flash.zip closure guard that bailed when the resolver
+# failed, and the QEMU smoke test that bailed without qemu and only warned when
+# BusyBox would not run.
+#
+# The wording above is deliberately chosen. An earlier version of this comment
+# described the first shape by naming it, and the guard below then matched its
+# own documentation - this file failed its own check. validate.yml drops comment
+# lines in its other guard for the same reason, and says so; here the text is
+# reworded instead, so the file still explains what it does without tripping it.
+#
+# It is a strong guard and it is also CI-only, so a fourth can appear unnoticed
+# until a push. The awk below is validate.yml's own, extracted - a copy would
+# drift from the workflow, which is the defect class this file exists to prevent.
+echo
+echo "  (a check must not report success without testing something)"
+VACUOUS=$(for f in $(git ls-files 'tests/*.sh' 'tools/*.sh' test-flash.sh 2>/dev/null); do
+    [ -f "$f" ] || continue
+    awk '
+      /skip|not found|unavailable|could not/ { sk = NR }
+      /^[[:space:]]*exit 0/ {
+        if (sk && NR - sk <= 2) { print FILENAME ":" NR }
+      }
+      /\|\|[[:space:]]*echo/ && /WARNING|skip|could not/ {
+        print FILENAME ":" NR
+      }
+    ' "$f"
+done)
+# Comment lines are dropped before the awk runs. The original snippet is
+# validate.yml's, verbatim, and that is precisely why it could not be used here:
+# this file's own comments quote both patterns it hunts, so it failed its own
+# check three times over - once for a /home path, once for a probe heredoc, and
+# once for the warn-instead-of-fail idiom quoted in the prose above.
+#
+# validate.yml drops comment lines in its other guard and documents why:
+# documenting the contract is not violating it. That reasoning applies here too,
+# so the filter is applied rather than the wording being bent again.
+VACUOUS=$(for f in $(git ls-files 'tests/*.sh' 'tools/*.sh' test-flash.sh 2>/dev/null); do
+    [ -f "$f" ] || continue
+    sed 's/^[[:space:]]*#.*$//' "$f" | awk '
+      /skip|not found|unavailable|could not/ { sk = NR }
+      /^[[:space:]]*exit 0/ {
+        if (sk && NR - sk <= 2) { print FILENAME ":" NR }
+      }
+      /\|\|[[:space:]]*echo/ && /WARNING|skip|could not/ {
+        print FILENAME ":" NR
+      }
+    ' FILENAME="$f"
+done)
+check "no test can report success without testing anything" \
+      "$([ -z "$VACUOUS" ] && echo 0 || echo 1)"
+if [ -n "$VACUOUS" ]; then
+    printf '%s\n' "$VACUOUS" | sed 's/^/      /'
+fi
+check "  ...and validate.yml still carries that guard" \
+      "$(grep -q 'can report success without testing' "$WF" && echo 0 || echo 1)"
+
+# The guard must be shown to bite. Planted in a throwaway file outside the
+# tracked set would not be scanned - git ls-files is what it iterates - so the
+# probe has to be tracked, which is exactly the discipline a new test needs.
+PROBE=tests/.vacuous-probe.sh
+trap 'git rm -f --cached "$PROBE" >/dev/null 2>&1; rm -f "$PROBE"; rm -rf "${AW:-/nonexistent}"' EXIT
+# Written line by line at runtime. A heredoc containing the literal skip text
+# and a bare `exit 0` is exactly what the guard hunts, so the guard matched the
+# test that runs it - which is what happened on the first run.
+{
+    printf '#!/bin/sh\n'
+    printf 'echo "%sing because the environment is un%s"\n' sk available
+    printf 'exit 0\n'
+} > "$PROBE"
+git add -f "$PROBE" >/dev/null 2>&1
+planted=$(for f in $(git ls-files 'tests/*.sh' 2>/dev/null); do
+    [ -f "$f" ] || continue
+    awk '
+      /skip|not found|unavailable|could not/ { sk = NR }
+      /^[[:space:]]*exit 0/ { if (sk && NR - sk <= 2) { print FILENAME } }
+    ' "$f"
+done)
+check "  ...and it REJECTS a test that skips and exits 0" \
+      "$(printf '%s' "$planted" | grep -q 'vacuous-probe' && echo 0 || echo 1)"
+git rm -f --cached "$PROBE" >/dev/null 2>&1
+rm -f "$PROBE"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ci guards: PASSED"
