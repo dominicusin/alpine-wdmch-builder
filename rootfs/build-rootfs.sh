@@ -77,7 +77,25 @@ fetch_apk() {
     [ -s "$APK_CACHE/$file" ] && return 0
     if [ "$repo" = main ]; then url="$MAIN_REPO/$file"; else url="$COMMUNITY_REPO/$file"; fi
     echo "Downloading $file"
-    curl -fsSL "$url" -o "$APK_CACHE/$file"
+    # Retry and atomic rename, for the same reasons as image/dl-packages.sh and
+    # measured there: build run 37088825852 lost ~25 minutes because one GET of
+    # one package out of 39 failed with no retry. Two copies of this download
+    # logic existed and only one was fixed, which is exactly how the second one
+    # gets missed - so tests/test_download_robustness.sh now covers every curl
+    # in the tree, not just the one that failed.
+    #
+    # The temporary name matters here too: `[ -s "$APK_CACHE/$file" ]` on the
+    # next run accepts any non-empty file as complete. A partial download left at
+    # the final path would be treated as cached and unpacked forever after.
+    local tmp="$APK_CACHE/.${file}.part"
+    if curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused \
+            "$url" -o "$tmp"; then
+        mv -f "$tmp" "$APK_CACHE/$file"
+    else
+        rm -f "$tmp"
+        echo "ERROR: cannot download $file from $url (after 4 retries)" >&2
+        return 1
+    fi
 }
 
 for entry in "${APKS[@]}"; do

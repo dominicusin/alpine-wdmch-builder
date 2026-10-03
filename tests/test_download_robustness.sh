@@ -67,6 +67,26 @@ check "the APKINDEX downloads are hardened the same way" \
 check "  ...and a failed index download removes its temporary" \
       "$([ "$(grep -cE 'rm -f "\$(MAIN_INDEX|COMM_INDEX)\.tmp"' "$SRC")" -ge 1 ] && echo 0 || echo 1)"
 
+# --- 2b. EVERY curl in the tree, not just the one that failed ----------------
+# There were two copies of this download logic - image/dl-packages.sh and
+# rootfs/build-rootfs.sh. The CI failure pointed at the first; the second had the
+# same missing retry and would have failed the same way, silently, on the next
+# unlucky network error. A check scoped to one file is a check that gets fixed
+# once and then lets the next copy rot.
+#
+# Scoped to the project's own build scripts: .work/ holds a kernel checkout with
+# its own test infrastructure, and tests/ deliberately contains hostile copies.
+ours=$(grep -rnE 'curl -fsSL' --include='*.sh' image/ rootfs/ tools/ scripts/ 2>/dev/null | grep -vc 'retry' || true)
+check "no curl in the project's build scripts lacks --retry" \
+      "$([ "${ours:-0}" -eq 0 ] && echo 0 || echo 1)"
+if [ "${ours:-0}" -ne 0 ]; then
+    grep -rnE 'curl -fsSL' --include='*.sh' image/ rootfs/ tools/ scripts/ 2>/dev/null \
+        | grep -v 'retry' | sed 's/^/      unhardened: /'
+fi
+# And the same for the temporary-name discipline, in both copies.
+check "build-rootfs.sh downloads through a temporary name too" \
+      "$(grep -qE 'local tmp="\$APK_CACHE/\.\$\{file\}\.part"' rootfs/build-rootfs.sh && echo 0 || echo 1)"
+
 # --- 3. the failure is still reported, not swallowed -------------------------
 # Retrying must not turn a genuine failure into a silent pass.
 check "a download that exhausts its retries still FAILS the build" \
