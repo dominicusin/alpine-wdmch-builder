@@ -87,11 +87,29 @@ download_pkg() {
         log "[DRY-RUN] would download $url/$file"
         return 0
     fi
-    if curl -fsSL "$url/$file" -o "$dest/$file" 2>/dev/null; then
+    # Retry, because one transient network error otherwise kills a 25-minute
+    # build. Proven in CI: run 37088825852 on fc45c9b failed with exactly one
+    # package, libssl3, while every other download in the same batch succeeded -
+    # then failed again on the retry of the run. A single flaky GET from a CDN
+    # is not a reason to discard 39 correct downloads and start over.
+    #
+    # --retry-connrefused matters as much as --retry: a CDN edge that drops the
+    # connection refuses the next one immediately, and without this curl gives
+    # up on the refusal rather than retrying it.
+    #
+    # Downloaded to a temporary name and moved into place only on success. A
+    # partially written file at the real path would be accepted by the [ -s ]
+    # "already present" check above on the next run - a truncated APK would then
+    # be packaged into flash.zip and reported as a successful build.
+    local tmp="$dest/.${file}.part"
+    if curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused \
+            "$url/$file" -o "$tmp" 2>/dev/null; then
+        mv -f "$tmp" "$dest/$file"
         log "OK ($(stat -c%s "$dest/$file") B)"
         return 0
     else
-        log "FAIL"
+        rm -f "$tmp"
+        log "FAIL (after 4 retries)"
         return 1
     fi
 }
@@ -120,12 +138,14 @@ log ""
 if [ ! -f "$MAIN_INDEX" ]; then
     log "APKINDEX (main) not cached — downloading..."
     mkdir -p "$(dirname "$MAIN_INDEX")"
-    curl -fsSL "$MAIN_URL/APKINDEX.tar.gz" -o "$MAIN_INDEX" || { log "ERROR: cannot download main APKINDEX"; exit 1; }
+    curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused "$MAIN_URL/APKINDEX.tar.gz" -o "$MAIN_INDEX.tmp" || { rm -f "$MAIN_INDEX.tmp"; log "ERROR: cannot download main APKINDEX (after 4 retries)"; exit 1; }
+    mv -f "$MAIN_INDEX.tmp" "$MAIN_INDEX"
 fi
 if [ ! -f "$COMM_INDEX" ]; then
     log "APKINDEX (community) not cached — downloading..."
     mkdir -p "$(dirname "$COMM_INDEX")"
-    curl -fsSL "$COMMUNITY_URL/APKINDEX.tar.gz" -o "$COMM_INDEX" || { log "ERROR: cannot download community APKINDEX"; exit 1; }
+    curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused "$COMMUNITY_URL/APKINDEX.tar.gz" -o "$COMM_INDEX.tmp" || { rm -f "$COMM_INDEX.tmp"; log "ERROR: cannot download community APKINDEX (after 4 retries)"; exit 1; }
+    mv -f "$COMM_INDEX.tmp" "$COMM_INDEX"
 fi
 
 OK=0

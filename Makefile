@@ -76,6 +76,7 @@ test: validate
 	bash tests/test_vendor_slots.sh
 	bash tests/test_init_disk.sh
 	bash tests/test_resolver.sh
+	bash tests/test_download_robustness.sh
 	python3 tests/test_resolver_properties.py
 	bash tests/test_property_seeds.sh
 	bash tests/test_apk_layout.sh
