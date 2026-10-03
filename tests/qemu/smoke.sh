@@ -8,27 +8,34 @@ set -Eeuo pipefail
 ROOTFS="$1"
 KERNEL_RELEASE="$2"
 
-echo "=== QEMU aarch64 rescue rootfs smoke test ==="
+# Either qemu binary does for this test. qemu-aarch64-static exists so the
+# emulator can be COPIED INTO a foreign rootfs to make chroot work; this test
+# never chroots - it execs the target binary directly - so the static build is
+# not needed here. Requiring it made the one test that actually EXECUTES aarch64
+# code unrunnable on any host that has only the ordinary package, which is most
+# of them. It still fails closed if neither is present.
+QEMU=""
+for candidate in qemu-aarch64-static qemu-aarch64; do
+    if command -v "$candidate" >/dev/null 2>&1; then QEMU="$candidate"; break; fi
+done
+[ -n "$QEMU" ] || {
+    echo "FAIL: no qemu-aarch64 found - the smoke test cannot run" >&2
+    echo "      Install qemu-user-static (provides qemu-aarch64-static) or" >&2
+    echo "      qemu-user (provides qemu-aarch64)." >&2
+    exit 1
+}
+
+echo "=== QEMU aarch64 rescue rootfs smoke test (via $QEMU) ==="
 
 # The whole point of this test is to execute aarch64 code under emulation.
 # If the emulator is missing, the test has not passed - it has not run. CI
 # installs qemu-user-static, so a missing emulator there is a broken
 # environment, not a reason to report green.
-if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
-    echo "FAIL: qemu-aarch64-static not found - the smoke test cannot run" >&2
-    exit 1
-fi
 
 # Prepare a test directory with the rootfs
 TEST_DIR=$(mktemp -d)
+trap 'rm -rf "$TEST_DIR"' EXIT
 cp -a "$ROOTFS" "$TEST_DIR/rootfs"
-
-# Copy qemu-aarch64-static into rootfs for chroot capability
-if [ -f /usr/bin/qemu-aarch64-static ]; then
-    cp /usr/bin/qemu-aarch64-static "$TEST_DIR/rootfs/usr/bin/qemu-aarch64-static"
-elif [ -f /usr/local/bin/qemu-aarch64-static ]; then
-    cp /usr/local/bin/qemu-aarch64-static "$TEST_DIR/rootfs/usr/bin/qemu-aarch64-static"
-fi
 
 # Run assertions inside QEMU userspace
 echo "Testing init exists and is executable..."
@@ -84,12 +91,11 @@ fi
 # It used to print a WARNING and let the test pass, so the test could not
 # fail on the very thing it exists to check.
 echo "Attempting QEMU userspace test..."
-if ! qemu-aarch64-static "$TEST_DIR/rootfs/bin/busybox" --help >/dev/null 2>&1; then
+if ! "$QEMU" "$TEST_DIR/rootfs/bin/busybox" --help >/dev/null 2>&1; then
     echo "FAIL: the aarch64 BusyBox did not run under QEMU" >&2
-    qemu-aarch64-static "$TEST_DIR/rootfs/bin/busybox" --help 2>&1 | head -3 >&2 || true
+    "$QEMU" "$TEST_DIR/rootfs/bin/busybox" --help 2>&1 | head -3 >&2 || true
     exit 1
 fi
 echo "OK: BusyBox runs in QEMU"
 
-rm -rf "$TEST_DIR"
 echo "QEMU smoke test PASSED"

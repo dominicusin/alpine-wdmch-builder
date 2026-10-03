@@ -77,6 +77,7 @@ test: validate
 	bash tests/test_resolver.sh
 	python3 tests/test_resolver_properties.py
 	bash tests/test_property_seeds.sh
+	bash tests/qemu/smoke.sh build/rootfs $$(cat build/kernel/kernel-release.txt 2>/dev/null || echo none)
 	bash tests/test_preflight.sh
 	bash tests/test_backup_fw.sh
 	bash tests/test_verifiers.sh

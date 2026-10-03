@@ -169,8 +169,12 @@ jobs:
           # The second shape is why test-flash.sh was being called by hand
           # in build.yml and had never been run by the release jobs - the
           # workflows that actually publish build/flash.zip.
-          # tests/qemu/smoke.sh stays allowed: it needs a built rootfs and
-          # runs on purpose after `make test`, it is not part of the list.
+          # tests/qemu/smoke.sh no longer needs an exemption: it is in the
+          # `test:` target now, so `make test` runs it and no workflow has to
+          # name it. It used to be listed here as deliberately exempt, which
+          # was true while it lived only in release.yml - and that is exactly
+          # how the one test that EXECUTES aarch64 code ended up never running
+          # on this machine at all.
           if grep -rnE '^\s+bash (tests/test_[a-z_]+\.sh|test-[a-z-]+\.sh)' \
                .github/workflows/release.yml .github/workflows/build.yml 2>/dev/null; then
             echo "FAIL: a workflow runs individual test scripts instead of 'make test':" >&2

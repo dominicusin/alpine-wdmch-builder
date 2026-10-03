@@ -88,8 +88,10 @@ jobs:
           # ci-run-tests.sh, not a bare `make test`: see the note in
           # build.yml. A failing step whose log is empty is not a result.
           bash tools/ci-run-tests.sh
-          echo "=== qemu/smoke.sh ==="
-          bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
+          # smoke.sh is inside `make test` now. It was called by hand here AND
+          # absent from the local suite, which meant the one test that executes
+          # aarch64 code ran only in this workflow - never on a developer
+          # machine, and never in the Validate lane.
 
       - name: Create release archive
         run: |
@@ -211,5 +213,7 @@ jobs:
           # ci-run-tests.sh, not a bare `make test`: see the note in
           # build.yml. A failing step whose log is empty is not a result.
           bash tools/ci-run-tests.sh
-          echo "=== qemu/smoke.sh ==="
-          bash tests/qemu/smoke.sh build/rootfs "$(cat build/kernel/kernel-release.txt)"
+          # smoke.sh is inside `make test` now. It was called by hand here AND
+          # absent from the local suite, which meant the one test that executes
+          # aarch64 code ran only in this workflow - never on a developer
+          # machine, and never in the Validate lane.
