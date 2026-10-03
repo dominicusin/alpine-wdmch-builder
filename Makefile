@@ -62,6 +62,7 @@ test: validate
 	bash tests/test_rescue_refusal.sh
 	bash tests/test_in_use_partition.sh
 	bash tests/test_btrfs_target.sh
+	bash tests/test_btrfs_members.sh
 	bash tests/test_btrfs_profiles.sh
 	bash tests/test_optin_failclosed.sh
 	bash tests/test_seams.sh

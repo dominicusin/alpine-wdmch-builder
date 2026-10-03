@@ -671,8 +671,26 @@ mounted=1
 if [ -n "$DATA_DEV" ]; then
     # Prove the second member is actually in the filesystem, rather than
     # assuming mkfs did what it was asked.
+    #
+    # This used to only LOG the count. The comment claimed to prove the second
+    # member joined, and nothing did: ndev was assigned and never compared with
+    # anything. If mkfs had silently built a single-device filesystem on p20 -
+    # the exact failure this whole layout exists to prevent - the installer would
+    # have printed a reassuring number, installed a root onto p20 alone, and
+    # reported success.
+    #
+    # `btrfs filesystem show` must be given $MNT. Without an argument it lists
+    # every btrfs on the host; on a machine with unrelated filesystems that
+    # count includes devices which have nothing to do with this install.
+    want=$(set -- $FS_DEVS; echo $#)
     ndev=$(btrfs_show_dev_count 2>/dev/null || echo "")
-    log "  btrfs members reported: ${ndev:-?}"
+    log "  btrfs members reported: ${ndev:-?} (want ${want})"
+    if [ -z "$ndev" ]; then
+        die "cannot read the device count back from $MNT - the filesystem was not verified"
+    fi
+    if [ "$ndev" -ne "$want" ]; then
+        die "the btrfs on $ROOT_DEV reports $ndev member(s), want $want - $DATA_DEV did not join. Refusing to install a root that would silently exclude it."
+    fi
 fi
 
 # Clear whatever was on it - a stale rootfs here would confuse the handoff.
