@@ -6,7 +6,7 @@
 # have caught it quietly passing forever - the same failure mode as the migration
 # plan that contradicted the contract while every check stayed green.
 set -u
-cd /home/dominicusin/src/alpine-wdmch-builder
+cd "$(dirname "$0")/.." || exit 1
 FAILED=0
 check() { if [ "$2" -eq 0 ]; then echo "  ok    $1"; else echo "  FAIL  $1"; FAILED=$((FAILED+1)); fi; }
 
