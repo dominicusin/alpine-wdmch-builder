@@ -234,6 +234,52 @@ check "  ...and it REJECTS a test that skips and exits 0" \
 git rm -f --cached "$PROBE" >/dev/null 2>&1
 rm -f "$PROBE"
 
+# --- 6. header checks stay single-sourced in tools/ -------------------------
+# validate.yml's last remaining content guard with no local counterpart. It is
+# pure grep, so it runs here unchanged, and it is the best-documented guard in the
+# repository: five attempts are recorded in its own comment, each explaining why
+# the previous one over-matched.
+#
+# The reason it exists is worth repeating because it is the same shape as every
+# other defect here - four bugs came from re-implementing a check tools/ already
+# owned: an exact grep against a decompiled dtc rendering, and three struct
+# parses with the wrong width. A copy has no mechanism to stay in sync.
+#
+# The command below is validate.yml's, verbatim. A rewrite would reintroduce the
+# over-matching that took five attempts to tune away.
+echo
+echo "  (header checks must stay single-sourced in tools/)"
+# This file is excluded because it necessarily contains the very tokens it
+# searches for - validate.yml excludes itself for the same reason, and states
+# why. Without that exclusion the guard matches its own source and fails; which
+# is the third time this file has done that, after a /home path and a skip-then-
+# exit probe.
+BAD_CODE=$(grep -rnE "unpack_from|0xd00dfeed|0x644D5241|0x91005A4D" \
+        --include='*.sh' --include='*.yml' . \
+        --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
+      | grep -v '^\./\.github/workflows/validate\.yml' \
+      | grep -v '^\./tests/test_ci_guards\.sh' \
+      | grep -vE '^\S+:[0-9]+:[[:space:]]*(#|//)' \
+      | grep -vE 'tools/check-image-header\.py|tools/check-fdt\.py' \
+      | grep -vE "unpack_from\('<I', b, 56\)|Bad ARM64 magic" \
+      | grep -vE '^\./tests/test_dtb\.sh:' || true)
+BAD_DOCS=$(grep -rn "unpack_from" --include='*.md' . \
+      --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
+      | grep -v '^\./docs/DEBUGGING\.md:' || true)
+BAD="$BAD_CODE$BAD_DOCS"
+check "no file re-implements a header check that tools/ already owns" \
+      "$([ -z "$BAD" ] && echo 0 || echo 1)"
+if [ -n "$BAD" ]; then
+    printf '%s\n' "$BAD" | head -5 | sed 's/^/      /'
+fi
+# The two registered exceptions must still exist. They are decisions on record,
+# and a guard that silently stopped honouring them would look identical to a
+# guard that had started over-matching.
+check "  ...the documented DEBUGGING.md exception still exists" \
+      "$(grep -q 'unpack_from' docs/DEBUGGING.md && echo 0 || echo 1)"
+check "  ...and check-image-header.py is still the single implementation" \
+      "$(grep -q 'unpack_from' tools/check-image-header.py && echo 0 || echo 1)"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ci guards: PASSED"
