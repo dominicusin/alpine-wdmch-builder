@@ -104,6 +104,27 @@ else
     fi
 fi
 
+# --- 3. the SHIPPED artifact, which is what the operator actually gets -------
+# The build tree and flash.zip are different things. A layout correct in build/
+# and flattened in the archive would pass everything above and still break every
+# install. So this reads the zip itself, the way an operator does.
+ZIP=build/flash.zip
+if [ ! -s "$ZIP" ]; then
+    echo "  (flash.zip not built - skipping the artifact check)"
+else
+    check "flash.zip exists" "0"
+    n_arch=$(unzip -l "$ZIP" 2>/dev/null | grep -cE 'apks/(main|community)/[a-z0-9_]+/.*\.apk$')
+    check "  ...its packages sit under apks/<repo>/<arch>/" \
+          "$([ "${n_arch:-0}" -gt 0 ] && echo 0 || echo 1)"
+    n_flat=$(unzip -l "$ZIP" 2>/dev/null | grep -cE 'apks/(main|community)/[^/]+\.apk$')
+    check "  ...and NO packages are flat (the shape that broke every install)" \
+          "$([ "${n_flat:-0}" -eq 0 ] && echo 0 || echo 1)"
+    n_idx=$(unzip -l "$ZIP" 2>/dev/null | grep -cE 'apks/(main|community)/[a-z0-9_]+/APKINDEX')
+    check "  ...both APKINDEX files are under the arch level too" \
+          "$([ "${n_idx:-0}" -eq 2 ] && echo 0 || echo 1)"
+    echo "  ($n_arch packages under the arch level, $n_idx indexes, $n_flat flat)"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "apk layout: PASSED"
