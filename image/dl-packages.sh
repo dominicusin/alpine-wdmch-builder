@@ -52,8 +52,18 @@ COMM_INDEX=".work/apk-cache-offline/community-APKINDEX.tar.gz"
 MAIN_DIR="build/usb-tree-root/apks/main/${ALPINE_ARCH}"
 COMM_DIR="build/usb-tree-root/apks/community/${ALPINE_ARCH}"
 
-[ -d "$MAIN_DIR" ] || mkdir -p "$MAIN_DIR"
-[ -d "$COMM_DIR" ] || mkdir -p "$COMM_DIR"
+# Start from an EMPTY repository, every run. This stage used to mkdir -p and
+# leave whatever was already there, so a stale file survived: a flat
+# apks/main/APKINDEX.tar.gz left over from before the arch level was introduced
+# is copied into flash.zip by the next package step and makes the layout check
+# fail on an otherwise correct build. Measured, not assumed - a planted file at
+# that path survived a full run untouched.
+#
+# Only the two repository directories are removed. package-rescue.sh owns the
+# whole USB_TREE and wipes it itself; removing it here as well would delete the
+# boot files between the two stages.
+rm -rf build/usb-tree-root/apks/main build/usb-tree-root/apks/community
+mkdir -p "$MAIN_DIR" "$COMM_DIR"
 
 # --- version resolver ---
 get_version() {

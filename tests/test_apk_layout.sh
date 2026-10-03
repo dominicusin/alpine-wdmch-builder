@@ -69,6 +69,18 @@ check "  ...for both repositories" \
 # USB_TREE *is* the staging tree.
 check "the layout is defined in dl-packages.sh, not duplicated in package-rescue.sh" \
       "$(grep -q 'apks/main/\${ALPINE_ARCH}' image/dl-packages.sh && echo 0 || echo 1)"
+
+# dl-packages.sh used to mkdir -p and leave whatever was already there. A stale
+# file at the OLD flat path survived a full run, and the package step copies this
+# tree verbatim - so one leftover APKINDEX from before the arch level existed
+# would land in flash.zip and fail the layout check on an otherwise correct
+# build. The repository must therefore be emptied before it is refilled.
+check "dl-packages.sh empties the repository before refilling it" \
+      "$(grep -qE 'rm -rf build/usb-tree-root/apks/(main|community)' image/dl-packages.sh && echo 0 || echo 1)"
+check "  ...but does not wipe the whole tree (that would delete the boot files" \
+      "$(grep -qE 'rm -rf .?\"?\$?USB_TREE' image/dl-packages.sh && echo 1 || echo 0)"
+check "  ...between the download and the packaging stages)" \
+      "$(grep -qE 'rm -rf build/usb-tree-root$' image/dl-packages.sh && echo 1 || echo 0)"
 check "  ...and package-rescue.sh does not copy the repo into itself" \
       "$(grep -q 'cp -a .*usb-tree-root/apks' image/package-rescue.sh && echo 1 || echo 0)"
 
