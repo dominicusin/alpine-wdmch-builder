@@ -11,7 +11,11 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-count_tests() { sed -n '/^test:/,/^$/p' Makefile | grep -cE '^[[:space:]]+bash '; }
+# Must mirror the guard in validate.yml exactly, including the python3: the
+# whole point of this file is to prove the two agree, so a divergence here IS a
+# divergence there. It counted only `bash ` until the resolver gained property
+# tests written in python.
+count_tests() { sed -n '/^test:/,/^$/p' Makefile | grep -cE '^[[:space:]]+(bash|python3) '; }
 stated_count() { grep -oE '[0-9]+ тестовых' ROADMAP.md | head -1 | grep -oE '[0-9]+'; }
 
 FAILED=0

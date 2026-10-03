@@ -352,7 +352,10 @@ jobs:
           # demanded the ROADMAP be edited DOWN to the wrong number. A guard that
           # cries wolf about a correct document trains everyone to edit the
           # document instead of reading it.
-          n_tests=$(sed -n '/^test:/,/^$/p' Makefile | grep -cE '^[[:space:]]+bash ')
+          # bash AND python3: the resolver's property tests are a .py file, and a
+          # count that only knows about bash under-reports the suite - which is
+          # how this guard demanded the ROADMAP be edited DOWN a second time.
+          n_tests=$(sed -n '/^test:/,/^$/p' Makefile | grep -cE '^[[:space:]]+(bash|python3) ')
           if grep -qE '[0-9]+ тестовых|all [0-9]+ test scripts' ROADMAP.md 2>/dev/null; then
             stated=$(grep -oE '[0-9]+ тестовых' ROADMAP.md | head -1 | grep -oE '[0-9]+')
             if [ "$stated" != "$n_tests" ]; then

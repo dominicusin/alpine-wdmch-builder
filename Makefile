@@ -75,6 +75,7 @@ test: validate
 	bash tests/test_vendor_slots.sh
 	bash tests/test_init_disk.sh
 	bash tests/test_resolver.sh
+	python3 tests/test_resolver_properties.py
 	bash tests/test_preflight.sh
 	bash tests/test_backup_fw.sh
 	bash tests/test_verifiers.sh
