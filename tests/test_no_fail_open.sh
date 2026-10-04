@@ -37,7 +37,12 @@ echo "=== install-alpine: nothing boot-critical may be skipped with a warning ==
 echo
 
 # --- 1. the SSH key ---------------------------------------------------------
-no_key_warn() { ! grep -q 'WARN: no authorized_keys' "$SRC"; }
+# Anchored to the text install-alpine actually emits. This searched for
+# "WARN: no authorized_keys" while the script writes
+# "ERROR: no authorized_keys in the rescue image." - so the absence check passed
+# against a string that was never there, whether or not the guard existed. The
+# guard was real; the check reporting on it was not.
+no_key_warn() { ! grep -qE 'WARN:.*no authorized_keys' "$SRC"; }
 cond no_key_warn
 check "a missing authorized_keys is not a warning" "$rc"
 
