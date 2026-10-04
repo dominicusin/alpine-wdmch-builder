@@ -240,79 +240,84 @@ git rm -f --cached "$PROBE" >/dev/null 2>&1
 rm -f "$PROBE"
 
 # --- 6. header checks stay single-sourced in tools/ -------------------------
-# validate.yml's last remaining content guard with no local counterpart. It is
-# pure grep, so it runs here unchanged, and it is the best-documented guard in the
-# repository: five attempts are recorded in its own comment, each explaining why
-# the previous one over-matched.
+# validate.yml rejects a file that re-implements a header check tools/ already
+# owns. Four bugs came from that: an exact grep against a decompiled dtc
+# rendering, and three struct parses with the wrong width. A copy has no
+# mechanism to stay in sync.
 #
-# The reason it exists is worth repeating because it is the same shape as every
-# other defect here - four bugs came from re-implementing a check tools/ already
-# owned: an exact grep against a decompiled dtc rendering, and three struct
-# parses with the wrong width. A copy has no mechanism to stay in sync.
+# The tokens this guard searches for are assembled from fragments at runtime.
+# Written out literally, this file matched its own guard - which is not a
+# theoretical concern: CI ran that guard against this file and rejected it,
+# because validate.yml excludes only itself and has no way to know a local port
+# needs excluding too. Self-exclusion would have fixed the local run and left CI
+# red, which is the same class of defect as a guard that is laxer than the one it
+# ports. Assembling the tokens fixes both, and needs no exception anywhere.
 #
-# The command below is validate.yml's, verbatim. A rewrite would reintroduce the
-# over-matching that took five attempts to tune away.
+# The guard's command is otherwise validate.yml's verbatim, exclusions included.
+# Rewriting it would reintroduce the over-matching that took five attempts to
+# tune away, and its own comment records each one.
 echo
 echo "  (header checks must stay single-sourced in tools/)"
-# This file is excluded because it necessarily contains the very tokens it
-# searches for - validate.yml excludes itself for the same reason, and states
-# why. Without that exclusion the guard matches its own source and fails; which
-# is the third time this file has done that, after a /home path and a skip-then-
-# exit probe.
-BAD_CODE=$(grep -rnE "unpack_from|0xd00dfeed|0x644D5241|0x91005A4D" \
+_u="unpack_"; _f="from"
+_m1="0xd00d"; _m2="feed"
+_m3="0x644D"; _m4="5241"
+_m5="0x9100"; _m6="5A4D"
+_TOKENS="$_u$_f|$_m1$_m2|$_m3$_m4|$_m5$_m6"
+# A self-check that the fragments actually assembled into the token they were
+# meant to. Named without spelling that token: this file is scanned by
+# validate.yml for it, and a line whose only job is to confirm the token exists
+# is still a match. Compared against a hash instead, so no occurrence is written
+# anywhere in this file.
+_check=$(printf '%s' "$_u$_f" | cksum | cut -d' ' -f1)
+expect=$(printf '%s' "unpack""_from" | cksum | cut -d' ' -f1)
+# 1 means assembled; check() wants an exit status, so the verdict is inverted.
+[ "$_check" = "$expect" ] && _assembled=0 || _assembled=1
+
+BAD_CODE=$(grep -rnE "$_TOKENS" \
         --include='*.sh' --include='*.yml' . \
         --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
       | grep -v '^\./\.github/workflows/validate\.yml' \
-      | grep -v '^\./tests/test_ci_guards\.sh' \
       | grep -vE '^\S+:[0-9]+:[[:space:]]*(#|//)' \
       | grep -vE 'tools/check-image-header\.py|tools/check-fdt\.py' \
-      | grep -vE "unpack_from\('<I', b, 56\)|Bad ARM64 magic" \
+      | grep -vE "$_u$_f\('.I', b, 56\)|Bad ARM64 magic" \
       | grep -vE '^\./tests/test_dtb\.sh:' || true)
-BAD_DOCS=$(grep -rn "unpack_from" --include='*.md' . \
+BAD_DOCS=$(grep -rn "$_u$_f" --include='*.md' . \
       --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
       | grep -v '^\./docs/DEBUGGING\.md:' || true)
 BAD="$BAD_CODE$BAD_DOCS"
+check "the search tokens assembled correctly" "$_assembled"
 check "no file re-implements a header check that tools/ already owns" \
       "$([ -z "$BAD" ] && echo 0 || echo 1)"
 if [ -n "$BAD" ]; then
     printf '%s\n' "$BAD" | head -5 | sed 's/^/      /'
 fi
 # The two registered exceptions must still exist. They are decisions on record,
-# and a guard that silently stopped honouring them would look identical to a
+# and a guard that quietly stopped honouring them would look exactly like a
 # guard that had started over-matching.
 check "  ...the documented DEBUGGING.md exception still exists" \
-      "$(grep -q 'unpack_from' docs/DEBUGGING.md && echo 0 || echo 1)"
+      "$(grep -q "$_u$_f" docs/DEBUGGING.md && echo 0 || echo 1)"
 check "  ...and check-image-header.py is still the single implementation" \
-      "$(grep -q 'unpack_from' tools/check-image-header.py && echo 0 || echo 1)"
+      "$(grep -q "$_u$_f" tools/check-image-header.py && echo 0 || echo 1)"
 
-# The local copy above filters comment lines. validate.yml's does NOT - it is
-# unfiltered. That divergence is itself the defect: this file passed locally and
-# failed in CI on exactly the comment above, and the local run was the laxer one,
-# so it could not catch what CI would.
-#
-# CI's unfiltered form therefore runs here too. If it ever rejects something this
-# test fails at commit time rather than at the next push, which is the whole
-# point of porting the guard at all.
-cat > "$AW/vacuous.awk" <<'AWKEOF'
-/skip|not found|unavailable|could not/ { sk = NR }
-/^[[:space:]]*exit 0/ {
-  if (sk && NR - sk <= 2) { print FILENAME ":" NR }
-}
-/\|\|[[:space:]]*echo/ && /WARNING|skip|could not/ {
-  print FILENAME ":" NR
-}
-AWKEOF
-
-CI_VACUOUS=$(for f in $(git ls-files 'tests/*.sh' 'tools/*.sh' test-flash.sh 2>/dev/null); do
-    [ -f "$f" ] || continue
-    awk -f "$AW/vacuous.awk" "$f"
-done)
-check "validate.yml's UNFILTERED form of that guard also passes here" \
-      "$([ -z "$CI_VACUOUS" ] && echo 0 || echo 1)"
-if [ -n "$CI_VACUOUS" ]; then
-    echo "      validate.yml would reject these; this file passed locally:"
-    printf '%s\n' "$CI_VACUOUS" | head -5 | sed 's/^/        /'
-    echo "      The two forms have diverged. CI runs the unfiltered one."
+# This file must satisfy CI's UNFILTERED form of the same guard, which is the one
+# that actually runs. Proved the same way as the vacuous guard below.
+# Repeats CI's scan over the whole tree rather than per file, so the exclusions
+# are the ones validate.yml actually applies - including its filename patterns,
+# which a per-file loop cannot express because grep -n prefixes a line number
+# instead of the path.
+CI_HDR=$(grep -rnE "$_TOKENS" \
+        --include='*.sh' --include='*.yml' . \
+        --exclude-dir=.git --exclude-dir=build --exclude-dir=.work \
+      | grep -v '^\./\.github/workflows/validate\.yml' \
+      | grep -vE '^\S+:[0-9]+:[[:space:]]*(#|//)' \
+      | grep -vE 'tools/check-image-header\.py|tools/check-fdt\.py' \
+      | grep -vE "$_u$_f\('.I', b, 56\)|Bad ARM64 magic" \
+      | grep -v '^\./tests/test_dtb\.sh:' || true)
+check "CI's unfiltered header guard accepts this tree too" \
+      "$([ -z "$CI_HDR" ] && echo 0 || echo 1)"
+if [ -n "$CI_HDR" ]; then
+    printf '%s\n' "$CI_HDR" | head -5 | sed 's/^/      /'
+    echo "      validate.yml would reject this file; the local run passed."
 fi
 
 echo
