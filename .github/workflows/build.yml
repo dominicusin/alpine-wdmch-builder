@@ -148,7 +148,24 @@ jobs:
 
       - name: Package rescue artifacts + flash.zip
         run: |
-          bash image/package-rescue.sh
+          # Output is captured, and the tail is re-printed on failure. This step
+          # runs after a 25-minute kernel build, so its own lines sit at the very
+          # end of a job log that GitHub truncates - and a failure here produced
+          # "Process completed with exit code 1" with nothing usable, on two
+          # separate commits, because nothing said what had failed.
+          #
+          # This is the same reasoning as tools/ci-run-tests.sh for the test
+          # suite: a failure must name itself. Re-printing the tail is what makes
+          # the next occurrence diagnosable instead of another guess.
+          set -o pipefail
+          bash image/package-rescue.sh 2>&1 | tee /tmp/package-rescue.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo ""
+            echo "## package-rescue.sh FAILED (exit $rc) - last 40 lines:"
+            tail -40 /tmp/package-rescue.log
+            exit "$rc"
+          fi
           echo ""
           echo "=== sata.uImage ==="
           # Header fields are checked by the one correct validator; it reads
