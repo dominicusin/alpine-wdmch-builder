@@ -57,10 +57,34 @@ jobs:
       - name: Cache kernel source + Alpine APK cache
         uses: actions/cache@v6
         with:
+          # The kernel source and the build-rootfs APK cache are keyed on the
+          # config that produced them. The APKINDEX cache is NOT included here.
+          #
+          # APKINDEX.tar.gz is a snapshot of what the Alpine mirror held at some
+          # moment, and mirror contents move: a point release can bump a package's
+          # revision while the Alpine VERSION string stays the same. Caching it
+          # on config/kernel.config meant a restore-keys hit handed the build a
+          # stale index, and the download step then asked the CDN for packages
+          # that index names and the mirror has already removed.
+          #
+          # Measured, not assumed - CI run 37173387788 on 89d5a84:
+          #
+          #     DL libssl3-3.3.7-r1.apk ... FAIL (after 4 retries)
+          #     ERROR: 1 package(s) failed to download - the offline repo is incomplete
+          #
+          # while every neighbouring package in the same batch returned OK. The
+          # stale index names r1; the mirror serves r2 and no longer hosts r1, so
+          # the URL is a 404 and retrying it four times cannot help. A locally
+          # fresh index gives 3.3.7-r2, which downloads.
+          #
+          # --retry was the wrong fix and it looked like the right one: it made
+          # this failure durable rather than intermittent, because a 404 is
+          # perfectly retryable. The index is fetched fresh each build, which is
+          # a few hundred KB, and the APK cache below still avoids re-downloading
+          # the packages themselves.
           path: |
             .work/monarch-6.18
             .work/apk-cache
-            .work/apk-cache-offline
           key: source-${{ steps.alpine.outputs.version }}-${{ steps.alpine.outputs.arch }}-${{ hashFiles('config/kernel.config', 'config/source-lock.env', 'rootfs/build-rootfs.sh') }}
           restore-keys: |
             source-${{ steps.alpine.outputs.version }}-${{ steps.alpine.outputs.arch }}-

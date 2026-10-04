@@ -135,6 +135,72 @@ log ""
 #
 # `make clean-cache` drops it. A long-lived checkout should do the same before a
 # release build, because CI always fetches fresh and would not reproduce it.
+#
+# A stale cached index is WORSE than none. Alpine keeps the VERSION string while
+# point releases bump individual package revisions, so an old index names
+# packages the mirror has already replaced. The download then asks for a URL that
+# returns 404, and retrying a 404 four times cannot help.
+#
+# Measured, not assumed - CI run 37173387788 on 89d5a84 failed with
+#
+#     DL libssl3-3.3.7-r1.apk ... FAIL (after 4 retries)
+#     ERROR: 1 package(s) failed to download - the offline repo is incomplete
+#
+# while every neighbouring package in the same batch returned OK. The cached
+# index named r1; the mirror serves r2 and no longer hosts r1.
+#
+# So an index is checked rather than trusted. Any .apk already downloaded must
+# still be one this index lists; if a payload and its index disagree, the index is
+# discarded and refetched. Payloads stay cached - only the listing is re-fetched.
+#
+# Note on --retry: adding it was the wrong fix and it looked like the right one.
+# It made this failure durable rather than intermittent, because a 404 is
+# perfectly retryable.
+index_matches_cache() {
+    local idx="$1" dir="$2" a pkg ver
+    [ -s "$idx" ] || return 1
+    for a in "$dir"/*.apk; do
+        [ -e "$a" ] || continue
+        # An APKINDEX record is two separate fields: `P:` names the package and
+        # `V:` its version, and the file on disk is "<name>-<version>.apk". So
+        # the payload's basename has to be split back apart before it can be
+        # compared - looking for a `P:` line equal to the full basename finds
+        # nothing at all, which is how the first attempt rejected every index.
+        base=$(basename "$a" .apk)
+        # APKINDEX records the version in full ("3.3.7-r2") and the file name
+        # ends with exactly that, so the split is: name, then everything after the
+        # FIRST dash that follows it. Splitting at the LAST dash instead yields
+        # only "r2" - and comparing that against the index's full version rejects
+        # every index, which two attempts here did before the name was taken from
+        # the index rather than guessed from the file name.
+        #
+        # So: ask the index which version of this package it has, then require
+        # the file name to end with exactly "-<that version>".
+        probe="${base%-*}"                 # libssl3-3.3.7
+        pkg="${probe%-*}"                  # libssl3
+        ver="${base#"$pkg"-}"              # 3.3.7-r2
+        [ "$ver" != "$base" ] || return 1  # no version part at all
+        idxver=$(tar xzOf "$idx" APKINDEX 2>/dev/null \
+              | awk -v p="$pkg" '$0=="P:"p{f=1;next} /^P:/{f=0} f&&/^V:/{print substr($0,3); exit}')
+        [ -n "$idxver" ] || return 1
+        # Same package at a different revision is exactly the drift that broke
+        # CI: the cached index names one, the mirror serves the other.
+        [ "$idxver" = "$ver" ] || return 1
+    done
+    return 0
+}
+
+if [ -f "$MAIN_INDEX" ] \
+   && ! index_matches_cache "$MAIN_INDEX" "$MAIN_DIR"; then
+    log "cached main APKINDEX disagrees with the cached packages - refetching..."
+    rm -f "$MAIN_INDEX"
+fi
+if [ -f "$COMM_INDEX" ] \
+   && ! index_matches_cache "$COMM_INDEX" "$COMM_DIR"; then
+    log "cached community APKINDEX disagrees with the cached packages - refetching..."
+    rm -f "$COMM_INDEX"
+fi
+
 if [ ! -f "$MAIN_INDEX" ]; then
     log "APKINDEX (main) not cached — downloading..."
     mkdir -p "$(dirname "$MAIN_INDEX")"
