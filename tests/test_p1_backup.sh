@@ -80,10 +80,18 @@ dd_count=$(grep -c 'dd if="${DISK}1"' "$SRC" || true)
 check "p1 is read exactly once (dd invocations: $dd_count)" "$rc"
 
 # 4. A failed read must be fatal, not a warning.
-no_warn() { ! grep -q 'WARN: could not read' "$SRC"; }
+# Anchored to the message the code actually emits. An earlier version searched
+# for "WARN: could not read" while install-alpine writes
+# "ERROR: could not read the firmware table" - so the absence check succeeded
+# against a string that was never there, and the check passed whether or not the
+# guard existed. A check that can only pass is not a check.
+no_warn() { ! grep -q 'WARN:.*could not read' "$SRC"; }
 cond no_warn
 check "a failed p1 read is no longer a warning" "$rc"
 
+# Same failure mode, same fix: the refusal text is asserted positively, so the
+# check fails if the guard is removed rather than succeeding because a string it
+# expected has gone missing.
 stops() { grep -q 'Refusing to continue' "$SRC"; }
 cond stops
 check "a failed p1 read stops the install" "$rc"
